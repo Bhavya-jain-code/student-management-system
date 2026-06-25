@@ -1,0 +1,227 @@
+import { useEffect, useState } from "react";
+import { getCourseClasses } from "../../services/classApi";
+import { getStudentEnrollments } from "../../services/enrollmentApi";
+
+export default function MyClassesPage() {
+  const [classes, setClasses] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const studentId = localStorage.getItem("student_id");
+
+  useEffect(() => {
+    loadClassesData();
+  }, []);
+
+  async function loadClassesData() {
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!studentId) {
+        console.error("Student ID is null:", studentId);
+        setError("Student ID not found. Please login again.");
+        return;
+      }
+
+      console.log("Loading classes for studentId:", studentId);
+
+      // Get all enrolled courses
+      const enrollmentsRes = await getStudentEnrollments(studentId);
+      console.log("Student Enrollments:", enrollmentsRes);
+
+      if (!enrollmentsRes?.data || enrollmentsRes.data.length === 0) {
+        setCourses([]);
+        setClasses([]);
+        return;
+      }
+
+      setCourses(enrollmentsRes.data);
+
+      // Fetch classes for each course
+      const allClasses = [];
+      for (const course of enrollmentsRes.data) {
+        try {
+          const classesRes = await getCourseClasses(course.course_id);
+          if (classesRes?.data) {
+            // Add course_name to each class
+            const classesWithCourse = classesRes.data.map((cls) => ({
+              ...cls,
+              course_name: course.course_name,
+              course_id: course.course_id,
+            }));
+            allClasses.push(...classesWithCourse);
+          }
+        } catch (err) {
+          console.log(`Error loading classes for course ${course.course_id}:`, err);
+        }
+      }
+
+      setClasses(allClasses);
+    } catch (err) {
+      console.error("Error loading classes:", err);
+      setError("Failed to load classes. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={containerStyle}>
+      {/* Header */}
+      <div style={headerStyle}>
+        <h1 style={{ margin: 0 }}>🎓 My Classes</h1>
+        <p style={{ marginTop: "10px", opacity: 0.9 }}>
+          {courses.length > 0
+            ? `${courses.length} course${courses.length !== 1 ? "s" : ""} enrolled`
+            : "Watch your course lectures and materials"}
+        </p>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={errorStyle}>
+          <h3>⚠️ {error}</h3>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && (
+        <div style={loadingStyle}>
+          <h3>Loading Classes...</h3>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!loading && !error && classes.length === 0 && (
+        <div style={emptyStyle}>
+          <h2>📭 No Classes Found</h2>
+          <p>
+            {courses.length === 0
+              ? "You haven't enrolled in any courses yet."
+              : "No classes available for your enrolled courses."}
+          </p>
+        </div>
+      )}
+
+      {/* Cards */}
+      {!loading && !error && classes.length > 0 && (
+        <div style={gridStyle}>
+          {classes.map((cls) => (
+            <div key={cls.id} style={cardStyle}>
+              <div style={courseTagStyle}>{cls.course_name}</div>
+
+              <h3 style={titleStyle}>{cls.title}</h3>
+
+              <p style={textStyle}>{cls.description}</p>
+
+              {cls.video_url && (
+                <div style={{ marginTop: "10px" }}>
+                  <iframe
+                    width="100%"
+                    height="200"
+                    src={cls.video_url}
+                    title="class video"
+                    style={{ borderRadius: "12px" }}
+                    allowFullScreen
+                  />
+                </div>
+              )}
+
+              <div style={badgeStyle}>Class Available</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =======================
+   STYLES (Sidebar Compatible UI)
+======================= */
+
+const containerStyle = {
+  padding: "30px",
+  background: "#f4f7fc",
+  minHeight: "100vh",
+};
+
+const headerStyle = {
+  background: "linear-gradient(135deg, #6366f1, #4338ca)",
+  color: "white",
+  padding: "30px",
+  borderRadius: "15px",
+  marginBottom: "30px",
+  boxShadow: "0 8px 20px rgba(0,0,0,0.15)",
+};
+
+const errorStyle = {
+  background: "#fee2e2",
+  color: "#991b1b",
+  padding: "20px",
+  borderRadius: "12px",
+  marginBottom: "20px",
+  border: "1px solid #fecaca",
+};
+
+const gridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+  gap: "20px",
+};
+
+const cardStyle = {
+  background: "white",
+  padding: "20px",
+  borderRadius: "16px",
+  boxShadow: "0 4px 15px rgba(0,0,0,0.08)",
+  border: "1px solid #e5e7eb",
+  position: "relative",
+};
+
+const courseTagStyle = {
+  display: "inline-block",
+  background: "#e0e7ff",
+  color: "#3730a3",
+  padding: "4px 10px",
+  borderRadius: "12px",
+  fontSize: "11px",
+  fontWeight: "700",
+  marginBottom: "8px",
+  textTransform: "uppercase",
+};
+
+const titleStyle = {
+  margin: "0 0 10px",
+  color: "#111827",
+};
+
+const textStyle = {
+  color: "#6b7280",
+};
+
+const badgeStyle = {
+  display: "inline-block",
+  marginTop: "12px",
+  background: "#dbeafe",
+  color: "#1d4ed8",
+  padding: "6px 12px",
+  borderRadius: "20px",
+  fontSize: "13px",
+  fontWeight: "600",
+};
+
+const emptyStyle = {
+  background: "white",
+  textAlign: "center",
+  padding: "50px",
+  borderRadius: "15px",
+  boxShadow: "0 4px 15px rgba(0,0,0,0.08)",
+};
+
+const loadingStyle = {
+  textAlign: "center",
+  padding: "40px",
+};
