@@ -14,6 +14,22 @@ export default function MyClassesPage() {
     loadClassesData();
   }, []);
 
+  function getVideoSrc(videoUrl) {
+    if (!videoUrl) return null;
+
+    const iframeMatch = videoUrl.match(/src=["']([^"']+)["']/i);
+    if (iframeMatch) {
+      return iframeMatch[1];
+    }
+
+    const watchIdMatch = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/);
+    if (watchIdMatch) {
+      return `https://www.youtube.com/embed/${watchIdMatch[1]}`;
+    }
+
+    return videoUrl;
+  }
+
   async function loadClassesData() {
     try {
       setLoading(true);
@@ -116,12 +132,12 @@ export default function MyClassesPage() {
 
               <p style={textStyle}>{cls.description}</p>
 
-              {cls.video_url && (
+                      {cls.video_url && (
                 <div style={{ marginTop: "10px" }}>
                   <iframe
                     width="100%"
                     height="200"
-                    src={cls.video_url}
+                    src={getVideoSrc(cls.video_url)}
                     title="class video"
                     style={{ borderRadius: "12px" }}
                     allowFullScreen

@@ -30,6 +30,22 @@ function ClassesPage() {
     }
   }
 
+  function getVideoSrc(videoUrl) {
+    if (!videoUrl) return null;
+
+    const iframeMatch = videoUrl.match(/src=["']([^"']+)["']/i);
+    if (iframeMatch) {
+      return iframeMatch[1];
+    }
+
+    const watchIdMatch = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/);
+    if (watchIdMatch) {
+      return `https://www.youtube.com/embed/${watchIdMatch[1]}`;
+    }
+
+    return videoUrl;
+  }
+
   async function handleDelete(classId) {
     if (!window.confirm("Are you sure?")) return;
 
@@ -101,8 +117,9 @@ function ClassesPage() {
                 <iframe
                   className="w-full mt-3 rounded-xl"
                   height="180"
-                  src={cls.video_url}
+                  src={getVideoSrc(cls.video_url)}
                   title="video"
+                  allowFullScreen
                 />
               )}
 
