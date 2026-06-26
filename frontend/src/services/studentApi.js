@@ -34,3 +34,6 @@ export const getStudentById = async (id) => {
 export const updateStudent = async (id, data) => {
   return await api.put(`/students/${id}`, data);
 };
+
+export const getStudyAdvisor = (studentId) =>
+  api.get(`/student-advisor/${studentId}`);

@@ -40,7 +40,8 @@ import MyAttendancePage from "./pages/student/MyAttendancePage";
 import MyMarksPage from "./pages/student/MyMarksPage";
 import MyPaymentsPage from "./pages/student/MyPaymentsPage";
 import EditStudentPage from "./pages/student/EditStudentPage";
-import MyClassesPage  from "./pages/student/MyClassesPage";
+import MyClassesPage from "./pages/student/MyClassesPage";
+import StudentAdvisorChat from "./pages/student/StudentAdvisorChat";
 // LAYOUTS
 import AdminLayout from "./pages/Layouts/AdminLayout";
 import StudentLayout from "./pages/Layouts/StudentLayout";
@@ -93,6 +94,10 @@ function App() {
               </AdminLayout>
             </ProtectedRoute>
           }
+        />
+        <Route
+          path="/students"
+          element={<Navigate to="/admin/students" replace />}
         />
          <Route
   path="/admin/classes"
@@ -213,6 +218,7 @@ function App() {
   <Route path="courses" element={<MyCoursesPage />} />
   <Route path="attendance" element={<MyAttendancePage />} />
   <Route path="/student/marks" element={<MyMarksPage />} />
+   <Route path="/student/advisor" element={<StudentAdvisorChat />} />
 </Route>
 <Route
   path="/student/classes"

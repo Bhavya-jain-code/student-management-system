@@ -3,6 +3,26 @@ import cors from "cors";
 import pg from "pg";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
+
+// Load environment variables as early as possible
+dotenv.config();
+
+// Initialize Google Gemini only if API key is provided.
+// Wrap in an async IIFE and guard against missing/invalid keys so
+// the server doesn't crash at startup when the key is absent or wrong.
+let ai = null;
+
+if (process.env.GEMINI_API_KEY) {
+  ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+  });
+
+  console.log("✅ Gemini Initialized");
+} else {
+  console.warn("❌ GEMINI_API_KEY not found");
+}
 
 const SECRET = "super_secret_key";
 
@@ -39,9 +59,7 @@ app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({
-        message: "Email and password required",
-      });
+      return res.status(400).json({ message: "Email and password required" });
     }
 
     const user = await pool.query("SELECT * FROM users WHERE email = $1", [
@@ -49,36 +67,24 @@ app.post("/login", async (req, res) => {
     ]);
 
     if (user.rows.length === 0) {
-      return res.status(401).json({
-        message: "User not found",
-      });
+      return res.status(401).json({ message: "User not found" });
     }
 
     const dbUser = user.rows[0];
 
-    // 🔥 SAFE CHECK (IMPORTANT)
     if (!dbUser.password) {
-      return res.status(500).json({
-        message: "Password not set in DB",
-      });
+      return res.status(500).json({ message: "Password not set in DB" });
     }
 
     const isMatch = await bcrypt.compare(password, dbUser.password);
 
     if (!isMatch) {
-      return res.status(401).json({
-        message: "Invalid password",
-      });
+      return res.status(401).json({ message: "Invalid password" });
     }
 
-    const token = jwt.sign(
-      {
-        id: dbUser.id,
-        role: dbUser.role,
-      },
-      SECRET,
-      { expiresIn: "1d" },
-    );
+    const token = jwt.sign({ id: dbUser.id, role: dbUser.role }, SECRET, {
+      expiresIn: "1d",
+    });
 
     let studentId = null;
     if (dbUser.role?.toLowerCase() === "student") {
@@ -109,10 +115,7 @@ app.post("/login", async (req, res) => {
     });
   } catch (err) {
     console.error("LOGIN ERROR FULL:", err);
-
-    res.status(500).json({
-      error: err.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1317,6 +1320,193 @@ app.get("/classes/course/:courseId", async (req, res) => {
   res.json(result.rows);
 });
 
+app.get("/student-advisor/:studentId", async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    // Marks Data
+    const marksResult = await pool.query(
+      `
+      SELECT
+      AVG(percentage) as avg_percentage,
+      MIN(percentage) as weakest_percentage
+      FROM marks
+      WHERE student_id = $1
+      `,
+      [studentId],
+    );
+
+    // Attendance Data
+    const attendanceResult = await pool.query(
+      `
+      SELECT
+      COUNT(*) as total_classes,
+      COUNT(*) FILTER (WHERE status='Present') as present_classes
+      FROM attendance
+      WHERE student_id = $1
+      `,
+      [studentId],
+    );
+
+    const avgMarks = Number(marksResult.rows[0].avg_percentage || 0);
+
+    const totalClasses = Number(attendanceResult.rows[0].total_classes || 0);
+
+    const presentClasses = Number(
+      attendanceResult.rows[0].present_classes || 0,
+    );
+
+    const attendance =
+      totalClasses === 0
+        ? 0
+        : Math.round((presentClasses / totalClasses) * 100);
+
+    let riskLevel = "Low";
+    let tips = [];
+
+    if (avgMarks < 40 || attendance < 60) {
+      riskLevel = "High";
+
+      tips = [
+        "Attend all upcoming classes",
+        "Practice weak topics daily",
+        "Solve previous year questions",
+        "Meet your mentor weekly",
+      ];
+    } else if (avgMarks < 60 || attendance < 75) {
+      riskLevel = "Medium";
+
+      tips = [
+        "Revise class notes",
+        "Take weekly mock tests",
+        "Improve attendance",
+      ];
+    } else {
+      tips = [
+        "Keep current performance",
+        "Participate in advanced projects",
+        "Help classmates and revise",
+      ];
+    }
+
+    res.json({
+      success: true,
+      avgMarks,
+      attendance,
+      riskLevel,
+      tips,
+    });
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.post("/advisor-chat", async (req, res) => {
+  try {
+    const { message, studentId } = req.body;
+
+    if (!ai) {
+      return res.status(500).json({
+        error: "Gemini AI is not initialized",
+      });
+    }
+
+    // Average Marks
+    const marksResult = await pool.query(
+      `
+      SELECT COALESCE(ROUND(AVG(percentage),2),0) AS avg_marks
+      FROM marks
+      WHERE student_id = $1
+      `,
+      [studentId],
+    );
+
+    // Attendance
+    const attendanceResult = await pool.query(
+      `
+      SELECT
+        COALESCE(
+          ROUND(
+            AVG(
+              CASE
+                WHEN LOWER(status)='present'
+                THEN 100
+                ELSE 0
+              END
+            ),2
+          ),0
+        ) AS attendance
+      FROM attendance
+      WHERE student_id = $1
+      `,
+      [studentId],
+    );
+
+    // Student Courses
+    const coursesResult = await pool.query(
+      `
+      SELECT c.title
+      FROM enrollments e
+      JOIN courses c
+        ON c.id = e.course_id
+      WHERE e.student_id = $1
+      `,
+      [studentId],
+    );
+
+    const avgMarks = Number(marksResult.rows[0].avg_marks);
+    const attendance = Number(attendanceResult.rows[0].attendance);
+
+    const courses =
+      coursesResult.rows.length > 0
+        ? coursesResult.rows.map((c) => c.title).join(", ")
+        : "No courses enrolled";
+
+    const prompt = `
+You are an AI Study Advisor for a Student Management System.
+
+Student Details:
+- Student ID: ${studentId}
+- Average Marks: ${avgMarks}%
+- Attendance: ${attendance}%
+- Enrolled Courses: ${courses}
+
+Rules:
+- Reply in simple English.
+- Keep answers within 5-6 lines.
+- Give personalized advice using the student's marks, attendance and enrolled courses.
+- Mention course names whenever relevant.
+- If attendance is below 75%, tell the student to improve attendance.
+- If marks are below 50%, suggest extra revision and practice.
+- If the user asks for their Student ID, reply with the Student ID above.
+- If the user asks "Which courses am I enrolled in?", answer using the course list above.
+- Never say "I don't have a student ID."
+
+Student Question:
+${message}
+`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    res.json({
+      reply: response.text,
+    });
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
 /* =========================
    🚀 SERVER START
 ========================= */

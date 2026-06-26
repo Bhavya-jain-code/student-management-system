@@ -42,7 +42,9 @@ function StudentSidebar() {
   <Link  style={linkStyle} to="/student/payments">
     💳 Payments
   </Link>
-
+<Link  style={linkStyle} to="/student/advisor">
+    💳 advisor
+  </Link>
       
     </div>
   );

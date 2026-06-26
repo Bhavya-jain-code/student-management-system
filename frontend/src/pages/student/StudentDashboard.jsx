@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import api from "../../services/axiosInstance";
+import { getStudyAdvisor } from "../../services/studentApi";
 
 function StudentDashboard() {
   const name = localStorage.getItem("name");
 
+  const [advisor, setAdvisor] = useState(null);
+
   const [data, setData] = useState({
-    totalCourses: 0,
+    myCourses: 0,
     attendance: 0,
     avgMarks: 0,
     feeStatus: "Pending",
@@ -13,21 +16,13 @@ function StudentDashboard() {
 
   useEffect(() => {
     loadDashboard();
+    loadAdvisor();
   }, []);
 
   const loadDashboard = async () => {
     try {
       const studentId =
         localStorage.getItem("student_id");
-
-      console.log(
-        "Student ID:",
-        studentId
-      );
-       console.log(
-      "Token:",
-      localStorage.getItem("token")
-    );
 
       if (!studentId) {
         console.error(
@@ -40,15 +35,27 @@ function StudentDashboard() {
         `/student-dashboard/${studentId}`
       );
 
-      console.log(
-        "Dashboard Data:",
-        res.data
-      );
-
       setData(res.data);
     } catch (err) {
       console.error(
         "Dashboard Error:",
+        err.response?.data || err.message
+      );
+    }
+  };
+
+  const loadAdvisor = async () => {
+    try {
+      const studentId =
+        localStorage.getItem("student_id");
+
+      const res =
+        await getStudyAdvisor(studentId);
+
+      setAdvisor(res.data);
+    } catch (err) {
+      console.error(
+        "Advisor Error:",
         err.response?.data || err.message
       );
     }
@@ -62,6 +69,8 @@ function StudentDashboard() {
         minHeight: "100vh",
       }}
     >
+      {/* Header */}
+
       <div
         style={{
           background:
@@ -83,6 +92,8 @@ function StudentDashboard() {
           Welcome back, <b>{name}</b> 👋
         </p>
       </div>
+
+      {/* Dashboard Cards */}
 
       <div
         style={{
@@ -141,9 +152,82 @@ function StudentDashboard() {
           }}
         >
           <h3>💰 Fee Status</h3>
-          <h1>{data.feeStatus || "Pending"}</h1>
+          <h1>
+            {data.feeStatus || "Pending"}
+          </h1>
         </div>
       </div>
+
+      {/* Smart Study Advisor */}
+
+      <div
+        style={{
+          marginTop: "30px",
+          background: "white",
+          padding: "25px",
+          borderRadius: "15px",
+          boxShadow:
+            "0 5px 15px rgba(0,0,0,0.1)",
+        }}
+      >
+        <h2>
+          🤖 Smart Study Advisor
+        </h2>
+
+        {advisor ? (
+          <>
+            <p>
+              <strong>
+                Attendance:
+              </strong>{" "}
+              {advisor.attendance}%
+            </p>
+
+            <p>
+              <strong>
+                Average Marks:
+              </strong>{" "}
+              {advisor.avgMarks}%
+            </p>
+
+            <p>
+              <strong>
+                Risk Level:
+              </strong>{" "}
+              {advisor.riskLevel ===
+              "High"
+                ? "🚨 High"
+                : advisor.riskLevel ===
+                  "Medium"
+                ? "⚠ Medium"
+                : "✅ Low"}
+            </p>
+
+            <h3
+              style={{
+                marginTop: "15px",
+              }}
+            >
+              Recommendations
+            </h3>
+
+            <ul>
+              {advisor.tips?.map(
+                (tip, index) => (
+                  <li key={index}>
+                    {tip}
+                  </li>
+                )
+              )}
+            </ul>
+          </>
+        ) : (
+          <p>Loading Advisor...</p>
+        )}
+      </div>
+   
+
+
     </div>
   );
 }
