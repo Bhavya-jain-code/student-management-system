@@ -6,11 +6,13 @@ function StudentLayout() {
   return (
     <>
       <Navbar />
-      <div style={{ display: "flex" }}>
+
+      <div className="flex">
         <StudentSidebar />
-        <div style={{ flex: 1 }}>
+
+        <main className="ml-64 mt-16 flex-1 p-6 bg-gray-100 min-h-[calc(100vh-64px)]">
           <Outlet />
-        </div>
+        </main>
       </div>
     </>
   );

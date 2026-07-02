@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../../services/axiosInstance";
 import { getStudyAdvisor } from "../../services/studentApi";
+import { Link } from "react-router-dom";
 
 function StudentDashboard() {
   const name = localStorage.getItem("name");
@@ -62,7 +63,9 @@ function StudentDashboard() {
   };
 
   return (
+    
     <div
+
       style={{
         padding: "30px",
         background: "#f4f7fc",
@@ -71,27 +74,40 @@ function StudentDashboard() {
     >
       {/* Header */}
 
-      <div
-        style={{
-          background:
-            "linear-gradient(135deg,#4f46e5,#7c3aed)",
-          color: "white",
-          padding: "30px",
-          borderRadius: "20px",
-          marginBottom: "30px",
-        }}
-      >
-        <h1>🎓 Student Dashboard</h1>
+      {/* Header */}
 
-        <p
-          style={{
-            fontSize: "18px",
-            marginTop: "10px",
-          }}
-        >
-          Welcome back, <b>{name}</b> 👋
-        </p>
-      </div>
+<div
+  style={{
+    background: "linear-gradient(135deg,#4f46e5,#7c3aed)",
+    color: "white",
+    padding: "30px",
+    borderRadius: "20px",
+    marginBottom: "30px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  }}
+>
+  <div>
+    <h1>🎓 Student Dashboard</h1>
+
+    <p
+      style={{
+        fontSize: "18px",
+        marginTop: "10px",
+      }}
+    >
+      Welcome back, <b>{name}</b> 👋
+    </p>
+  </div>
+
+  <Link
+    to="/student/profile"
+     className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+  >
+    👤 My Profile
+  </Link>
+</div>
 
       {/* Dashboard Cards */}
 

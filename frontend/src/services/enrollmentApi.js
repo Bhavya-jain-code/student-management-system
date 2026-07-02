@@ -19,3 +19,8 @@ export const getEnrollments = async () => {
   const res = await api.get("/enrollments");
   return res.data;
 };
+
+export const deleteEnrollment = async (id) => {
+  const response = await api.delete(`/enrollments/${id}`);
+  return response.data;
+};

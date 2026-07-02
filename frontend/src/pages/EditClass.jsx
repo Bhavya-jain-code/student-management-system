@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { addClass } from "../services/classApi";
+import { useNavigate, useParams } from "react-router-dom";
 import { getCourses } from "../services/courseApi";
+import {
+  getClassById,
+  updateClass,
+} from "../services/classApi";
 
-function AddClass() {
+function EditClass() {
+  const { id } = useParams();
   const navigate = useNavigate();
 
   const [courses, setCourses] = useState([]);
@@ -18,89 +22,110 @@ function AddClass() {
   });
 
   useEffect(() => {
-    loadCourses();
+    loadData();
   }, []);
 
-  async function loadCourses() {
+  async function loadData() {
     try {
-      const data = await getCourses();
-      setCourses(data || []);
+      const [courseList, classData] = await Promise.all([
+        getCourses(),
+        getClassById(id),
+      ]);
+
+      setCourses(courseList || []);
+
+      setForm({
+        course_id: classData.course_id || "",
+        title: classData.title || "",
+        video_url: classData.video_url || "",
+        description: classData.description || "",
+      });
     } catch (err) {
       console.error(err);
-      alert("Unable to load courses");
+      alert("Unable to load class details.");
+      navigate("/admin/classes");
     } finally {
       setLoading(false);
     }
   }
 
   function handleChange(e) {
-    setForm({
-      ...form,
+    setForm((prev) => ({
+      ...prev,
       [e.target.name]: e.target.value,
-    });
+    }));
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
 
-    if (
-      !form.course_id ||
-      !form.title ||
-      !form.video_url
-    ) {
-      alert("Please fill all required fields");
+    if (!form.course_id || !form.title.trim()) {
+      alert("Please fill all required fields.");
       return;
     }
 
     try {
       setSaving(true);
 
-      await addClass(form);
+      await updateClass(id, form);
 
-      alert("Class Added Successfully");
-
-      setForm({
-        course_id: "",
-        title: "",
-        video_url: "",
-        description: "",
-      });
+      alert("Class updated successfully.");
 
       navigate("/admin/classes");
-
     } catch (err) {
       console.error(err);
-      alert("Unable to add class");
+      alert("Failed to update class.");
     } finally {
       setSaving(false);
     }
   }
+
+  function getPreviewUrl(url) {
+    if (!url) return "";
+
+    const match = url.match(
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/
+    );
+
+    return match
+      ? `https://www.youtube.com/embed/${match[1]}`
+      : url;
+  }
     if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-lg font-medium">Loading courses...</p>
+        <div className="bg-white shadow-lg rounded-xl p-8">
+          <h2 className="text-xl font-semibold">Loading class...</h2>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className="min-h-screen bg-gray-100 py-8 px-4">
 
-      <div className="max-w-2xl mx-auto bg-white rounded-2xl shadow-lg p-8">
+      <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-lg overflow-hidden">
 
-        <h2 className="text-3xl font-bold mb-6">
-          Add New Class
-        </h2>
+        {/* Header */}
+        <div className="bg-blue-600 text-white px-8 py-5">
+          <h2 className="text-3xl font-bold">
+            Edit Class
+          </h2>
+
+          <p className="text-blue-100 mt-1">
+            Update class details and video information.
+          </p>
+        </div>
 
         <form
           onSubmit={handleSubmit}
-          className="space-y-5"
+          className="p-8 space-y-6"
         >
 
           {/* Course */}
           <div>
-            <label className="block mb-2 font-medium">
-              Select Course
+            <label className="block font-semibold mb-2">
+              Course
             </label>
 
             <select
@@ -111,7 +136,7 @@ function AddClass() {
               required
             >
               <option value="">
-                -- Select Course --
+                Select Course
               </option>
 
               {courses.map((course) => (
@@ -125,9 +150,9 @@ function AddClass() {
             </select>
           </div>
 
-          {/* Class Title */}
+          {/* Title */}
           <div>
-            <label className="block mb-2 font-medium">
+            <label className="block font-semibold mb-2">
               Class Title
             </label>
 
@@ -144,7 +169,7 @@ function AddClass() {
 
           {/* Video URL */}
           <div>
-            <label className="block mb-2 font-medium">
+            <label className="block font-semibold mb-2">
               YouTube Video URL
             </label>
 
@@ -155,13 +180,29 @@ function AddClass() {
               onChange={handleChange}
               placeholder="https://www.youtube.com/watch?v=..."
               className="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              required
             />
           </div>
 
+          {/* Video Preview */}
+          {form.video_url && (
+            <div>
+              <label className="block font-semibold mb-2">
+                Video Preview
+              </label>
+
+              <iframe
+                title="Class Video"
+                src={getPreviewUrl(form.video_url)}
+                className="w-full rounded-xl border"
+                height="300"
+                allowFullScreen
+              />
+            </div>
+          )}
+
           {/* Description */}
           <div>
-            <label className="block mb-2 font-medium">
+            <label className="block font-semibold mb-2">
               Description
             </label>
 
@@ -170,26 +211,26 @@ function AddClass() {
               rows="5"
               value={form.description}
               onChange={handleChange}
-              placeholder="Enter class description"
+              placeholder="Enter class description..."
               className="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
           {/* Buttons */}
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
 
             <button
               type="submit"
               disabled={saving}
-              className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg disabled:opacity-50"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold disabled:opacity-50"
             >
-              {saving ? "Adding..." : "Add Class"}
+              {saving ? "Updating..." : "Update Class"}
             </button>
 
             <button
               type="button"
               onClick={() => navigate("/admin/classes")}
-              className="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-lg"
+              className="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold"
             >
               Cancel
             </button>
@@ -204,4 +245,4 @@ function AddClass() {
   );
 }
 
-export default AddClass;
+export default EditClass;

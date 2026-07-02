@@ -5,7 +5,8 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-
+import { pushAction, popAction } from "./services/undoStack.js";
+import { enqueue, dequeue, getQueue } from "./services/queue.js";
 // Load environment variables as early as possible
 dotenv.config();
 
@@ -30,7 +31,7 @@ const app = express();
 app.use(
   cors({
     origin: "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
@@ -217,33 +218,64 @@ const verifyToken = (req, res, next) => {
 // ================= PROTECTED ROUTE =================
 app.get("/dashboard", async (req, res) => {
   try {
-    const students = await pool.query("SELECT COUNT(*) FROM students");
-
-    const courses = await pool.query("SELECT COUNT(*) FROM courses");
-
-    const enrollments = await pool.query("SELECT COUNT(*) FROM enrollments");
-
-    const courseChart = await pool.query(`
-     SELECT
-  c.title,
-  COUNT(e.id) AS students
-FROM courses c
-LEFT JOIN enrollments e
-ON c.id = e.course_id
-GROUP BY c.id, c.title
+    // -------------------------
+    // TOTAL COUNTS (NO FILTER)
+    // -------------------------
+    const students = await pool.query(`
+      SELECT COUNT(*) FROM students
     `);
 
+    const courses = await pool.query(`
+      SELECT COUNT(*) FROM courses
+      WHERE COALESCE(status, 'active') = 'active'
+    `);
+
+    const enrollments = await pool.query(`
+      SELECT COUNT(*) FROM enrollments
+    `);
+
+    // -------------------------
+    // COURSE CHART
+    // -------------------------
+    const courseChart = await pool.query(`
+      SELECT
+        c.title,
+        COUNT(e.id) AS students
+      FROM courses c
+      LEFT JOIN enrollments e
+        ON c.id = e.course_id
+      WHERE COALESCE(c.status, 'active') = 'active'
+      GROUP BY c.id, c.title
+    `);
+
+    // -------------------------
+    // ATTENDANCE STATS
+    // -------------------------
+    const attendance = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'Present') AS present,
+        COUNT(*) FILTER (WHERE status = 'Absent') AS absent
+      FROM attendance
+    `);
+
+    // -------------------------
+    // RESPONSE
+    // -------------------------
     res.json({
       totalStudents: Number(students.rows[0].count),
       totalCourses: Number(courses.rows[0].count),
       totalEnrollments: Number(enrollments.rows[0].count),
+
       courseChart: courseChart.rows,
+
+      attendance: {
+        present: Number(attendance.rows[0].present || 0),
+        absent: Number(attendance.rows[0].absent || 0),
+      },
     });
   } catch (err) {
     console.log(err);
-    res.status(500).json({
-      error: err.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 });
 /* =========================
@@ -266,15 +298,31 @@ app.post("/students", async (req, res) => {
 
     const student = studentResult.rows[0];
 
+    // ✅ Stack me Add action save karo
+    pushAction({
+      type: "ADD",
+      student: student,
+    });
+
     // 2. Check user already exists
     const existingUser = await pool.query(
       "SELECT * FROM users WHERE email = $1",
       [email],
     );
 
+    // Queue
+    enqueue({
+      action: "Student Added",
+      studentId: student.id,
+      name: student.name,
+      time: new Date(),
+    });
+
     let userResult = null;
+
     if (existingUser.rows.length === 0) {
       console.log("INSIDE USER INSERT BLOCK");
+
       const hashedPassword = await bcrypt.hash("123456", 10);
 
       userResult = await pool.query(
@@ -294,40 +342,88 @@ app.post("/students", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+
     res.status(500).json({
       error: err.message,
     });
   }
 });
-
-// GET ALL
+// GET ALL STUDENTS (Pagination + Search + Sort + Active Only)
 app.get("/students", async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = 5;
     const offset = (page - 1) * limit;
 
-    const students = await pool.query(
-      `
+    const { search = "", sort = "latest" } = req.query;
+
+    let query = `
       SELECT *
       FROM students
-      ORDER BY id DESC
-      LIMIT $1 OFFSET $2
-      `,
-      [limit, offset],
-    );
+      WHERE status = 'active'
+    `;
 
-    const count = await pool.query("SELECT COUNT(*) FROM students");
+    const values = [];
+    let index = 1;
+
+    // Search
+    if (search) {
+      query += `
+        AND (
+          name ILIKE $${index}
+          OR email ILIKE $${index}
+        )
+      `;
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    // Sorting
+    if (sort === "name") {
+      query += ` ORDER BY name ASC`;
+    } else if (sort === "oldest") {
+      query += ` ORDER BY id ASC`;
+    } else {
+      query += ` ORDER BY id DESC`;
+    }
+
+    // Pagination
+    query += ` LIMIT $${index} OFFSET $${index + 1}`;
+    values.push(limit, offset);
+
+    const students = await pool.query(query, values);
+
+    // Total count (pagination ke liye)
+    let countQuery = `
+      SELECT COUNT(*) AS count
+      FROM students
+      WHERE status = 'active'
+    `;
+
+    const countValues = [];
+
+    if (search) {
+      countQuery += `
+        AND (
+          name ILIKE $1
+          OR email ILIKE $1
+        )
+      `;
+      countValues.push(`%${search}%`);
+    }
+
+    const count = await pool.query(countQuery, countValues);
 
     res.json({
       success: true,
       data: students.rows,
       total: Number(count.rows[0].count),
       currentPage: page,
-      totalPages: Math.ceil(count.rows[0].count / limit),
+      totalPages: Math.ceil(Number(count.rows[0].count) / limit),
     });
   } catch (err) {
     console.error(err);
+
     res.status(500).json({
       success: false,
       error: err.message,
@@ -355,70 +451,34 @@ app.get("/students/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.get("/students", async (req, res) => {
-  try {
-    const { search = "", status = "", sort = "latest" } = req.query;
-
-    let query = `
-      SELECT *
-      FROM students
-      WHERE 1=1
-    `;
-
-    const values = [];
-    let index = 1;
-
-    // Search
-    if (search) {
-      query += `
-        AND (
-          name ILIKE $${index}
-          OR email ILIKE $${index}
-        )
-      `;
-      values.push(`%${search}%`);
-      index++;
-    }
-
-    // Filter by status
-    if (status) {
-      query += ` AND status = $${index}`;
-      values.push(status);
-      index++;
-    }
-
-    // Sorting
-    if (sort === "name") {
-      query += ` ORDER BY name ASC`;
-    } else if (sort === "oldest") {
-      query += ` ORDER BY id ASC`;
-    } else {
-      query += ` ORDER BY id DESC`;
-    }
-
-    const result = await pool.query(query, values);
-
-    res.json({
-      success: true,
-      count: result.rows.length,
-      data: result.rows,
-    });
-  } catch (err) {
-    console.error("GET STUDENTS ERROR:", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
 
 // UPDATE (FIXED SAFE VERSION)
 app.put("/students/:id", async (req, res) => {
   try {
     const { name, email, phone, address, status } = req.body;
 
+    // 1. Update se pehle old student data nikalo
+    const oldStudent = await pool.query(
+      "SELECT * FROM students WHERE id = $1",
+      [req.params.id],
+    );
+
+    if (oldStudent.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    // 2. Stack me old data save karo
+    pushAction({
+      type: "UPDATE",
+      student: oldStudent.rows[0],
+    });
+
+    // 3. Student update karo
     const result = await pool.query(
-      `UPDATE students 
+      `UPDATE students
        SET name=$1, email=$2, phone=$3, address=$4, status=$5
        WHERE id=$6
        RETURNING *`,
@@ -431,13 +491,13 @@ app.put("/students/:id", async (req, res) => {
         req.params.id,
       ],
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Student not found",
-      });
-    }
+    // ✅ Queue me Update event save karo
+    enqueue({
+      action: "Student Updated",
+      studentId: req.params.id,
+      name: oldStudent.rows[0].name,
+      time: new Date(),
+    });
 
     res.json({
       success: true,
@@ -445,32 +505,139 @@ app.put("/students/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("UPDATE ERROR:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
-// DELETE
+// DELETE (Soft Delete only)
 app.delete("/students/:id", async (req, res) => {
   try {
-    const result = await pool.query(
-      "DELETE FROM students WHERE id=$1 RETURNING *",
+    const oldStudent = await pool.query(
+      "SELECT * FROM students WHERE id = $1",
       [req.params.id],
     );
 
-    if (result.rows.length === 0) {
+    if (oldStudent.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Student not found",
       });
     }
 
+    pushAction({
+      type: "DELETE",
+      student: oldStudent.rows[0],
+    });
+
+    await pool.query("BEGIN");
+
+    await pool.query(
+      `UPDATE students
+       SET status = 'inactive'
+       WHERE id = $1`,
+      [req.params.id],
+    );
+
+    await pool.query("COMMIT");
+
+    enqueue({
+      action: "Student Deleted",
+      studentId: req.params.id,
+      name: oldStudent.rows[0].name,
+      time: new Date(),
+    });
+
     res.json({
       success: true,
-      message: "Student deleted",
+      message: "Student marked inactive successfully (soft delete)",
+    });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error(err);
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+// UNDO SOFT DELETE
+app.put("/students/:id/undo", async (req, res) => {
+  try {
+    const studentId = req.params.id;
+
+    const existing = await pool.query("SELECT * FROM students WHERE id = $1", [
+      studentId,
+    ]);
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    await pool.query(
+      `UPDATE students
+       SET status = 'active'
+       WHERE id = $1`,
+      [studentId],
+    );
+
+    res.json({
+      success: true,
+      message: "Student restored successfully",
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+// HARD DELETE (use only when you want to remove all dependent records too)
+app.delete("/students/:id/hard", async (req, res) => {
+  try {
+    const studentId = req.params.id;
+
+    const oldStudent = await pool.query(
+      "SELECT * FROM students WHERE id = $1",
+      [studentId],
+    );
+
+    if (oldStudent.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    await pool.query("BEGIN");
+
+    await pool.query("DELETE FROM payments WHERE student_id = $1", [studentId]);
+    await pool.query("DELETE FROM marks WHERE student_id = $1", [studentId]);
+    await pool.query("DELETE FROM attendance WHERE student_id = $1", [
+      studentId,
+    ]);
+    await pool.query("DELETE FROM enrollments WHERE student_id = $1", [
+      studentId,
+    ]);
+    await pool.query("DELETE FROM students WHERE id = $1", [studentId]);
+
+    await pool.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Student hard deleted successfully along with dependent records",
+    });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error(err);
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
@@ -509,15 +676,42 @@ app.post("/courses", async (req, res) => {
 
 app.get("/courses", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM courses");
+    const result = await pool.query(
+      "SELECT * FROM courses WHERE status != $1",
+      ["deleted"], // or "inactive"
+    );
+
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.put("/courses/:id", async (req, res) => {
   try {
     const { title, duration, fee, status } = req.body;
+
+    const existing = await pool.query("SELECT * FROM courses WHERE id = $1", [
+      req.params.id,
+    ]);
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ message: "Course not found" });
+    }
+
+    const current = existing.rows[0];
+    const safeTitle =
+      typeof title === "string" && title.trim() ? title.trim() : current.title;
+    const safeDuration =
+      typeof duration === "string" && duration.trim()
+        ? duration.trim()
+        : current.duration;
+    const safeFee =
+      fee !== undefined && fee !== null && fee !== "" ? fee : current.fee;
+    const normalizedStatus =
+      typeof status === "string" && status.trim()
+        ? status.trim().toLowerCase()
+        : current.status || "active";
 
     const result = await pool.query(
       `UPDATE courses
@@ -527,7 +721,32 @@ app.put("/courses/:id", async (req, res) => {
            status=$4
        WHERE id=$5
        RETURNING *`,
-      [title, duration, fee, status, req.params.id],
+      [safeTitle, safeDuration, safeFee, normalizedStatus, req.params.id],
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.put("/courses/delete/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE courses SET status=$1 WHERE id=$2 RETURNING *",
+      ["deleted", req.params.id],
+    );
+
+    res.json({ message: "Course soft deleted", data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/courses/restore/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE courses SET status=$1 WHERE id=$2 RETURNING *",
+      ["active", req.params.id],
     );
 
     res.json(result.rows[0]);
@@ -538,17 +757,68 @@ app.put("/courses/:id", async (req, res) => {
 
 app.delete("/courses/:id", async (req, res) => {
   try {
-    const result = await pool.query(
-      "DELETE FROM courses WHERE id=$1 RETURNING *",
-      [req.params.id],
-    );
+    const courseId = req.params.id;
 
-    if (result.rows.length === 0) {
+    const existing = await pool.query("SELECT * FROM courses WHERE id = $1", [
+      courseId,
+    ]);
+
+    if (existing.rows.length === 0) {
       return res.status(404).json({ message: "Course not found" });
     }
 
-    res.json({ message: "Course deleted", data: result.rows[0] });
+    await pool.query("BEGIN");
+
+    await pool.query(
+      `UPDATE courses
+       SET status = 'inactive'
+       WHERE id = $1`,
+      [courseId],
+    );
+
+    await pool.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Course marked inactive successfully (soft delete)",
+      data: existing.rows[0],
+    });
   } catch (err) {
+    await pool.query("ROLLBACK");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/courses/:id/hard", async (req, res) => {
+  try {
+    const courseId = req.params.id;
+
+    const existing = await pool.query("SELECT * FROM courses WHERE id = $1", [
+      courseId,
+    ]);
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ message: "Course not found" });
+    }
+
+    await pool.query("BEGIN");
+
+    await pool.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
+    await pool.query("DELETE FROM marks WHERE course_id = $1", [courseId]);
+    await pool.query("DELETE FROM attendance WHERE course_id = $1", [courseId]);
+    await pool.query("DELETE FROM enrollments WHERE course_id = $1", [
+      courseId,
+    ]);
+    await pool.query("DELETE FROM courses WHERE id = $1", [courseId]);
+
+    await pool.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Course hard deleted successfully along with dependent records",
+    });
+  } catch (err) {
+    await pool.query("ROLLBACK");
     res.status(500).json({ error: err.message });
   }
 });
@@ -558,34 +828,350 @@ app.delete("/courses/:id", async (req, res) => {
 // ========================= */
 
 app.post("/EnrollStudent", async (req, res) => {
+  const client = await pool.connect();
+
   try {
-    console.log("BODY RECEIVED:", req.body);
+    await client.query("BEGIN");
 
-    const { student_id, course_id } = req.body;
+    const {
+      student_id,
+      course_id,
+      paid_amount,
+      payment_mode,
+      transaction_id,
+      installments,
+    } = req.body;
 
-    const result = await pool.query(
+    // Duplicate Check
+    const check = await client.query(
+      `SELECT * FROM enrollments
+       WHERE student_id=$1
+       AND course_id=$2`,
+      [student_id, course_id],
+    );
+
+    if (check.rows.length > 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(409).json({
+        message: "Student already enrolled",
+      });
+    }
+
+    // Course Fee
+    const course = await client.query("SELECT fee FROM courses WHERE id=$1", [
+      course_id,
+    ]);
+
+    if (course.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "Course not found",
+      });
+    }
+
+    const totalFee = Number(course.rows[0].fee);
+
+    // Enrollment
+    const enrollment = await client.query(
+      `
+      INSERT INTO enrollments
+      (
+        student_id,
+        course_id
+      )
+      VALUES($1,$2)
+      RETURNING *
+      `,
+      [student_id, course_id],
+    );
+
+    const enrollmentId = enrollment.rows[0].id;
+
+    // First Payment
+    await client.query(
+      `
+      INSERT INTO payments
+      (
+        enrollment_id,
+        amount,
+        payment_date,
+        payment_mode,
+        transaction_id,
+        installment_no,
+        status,
+        is_deleted
+      )
+      VALUES
+      (
+        $1,
+        $2,
+        CURRENT_DATE,
+        $3,
+        $4,
+        1,
+        'paid',
+        false
+      )
+      `,
+      [enrollmentId, paid_amount, payment_mode, transaction_id],
+    );
+
+    // Remaining Fee
+    const remaining = totalFee - Number(paid_amount);
+
+    if (remaining > 0 && Number(installments) > 1) {
+      const each = remaining / (Number(installments) - 1);
+
+      for (let i = 2; i <= Number(installments); i++) {
+        let due = new Date();
+
+        due.setMonth(due.getMonth() + (i - 1));
+
+        await client.query(
+          `
+          INSERT INTO installments
+          (
+            enrollment_id,
+            installment_no,
+            amount,
+            due_date,
+            paid_amount,
+            status
+          )
+          VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4,
+            0,
+            'Pending'
+          )
+          `,
+          [enrollmentId, i, each, due],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Enrollment Successful",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    console.log(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/installments", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        i.id,
+        i.installment_no,
+        i.amount,
+        i.paid_amount,
+        i.status,
+        i.due_date,
+
+        e.id AS enrollment_id,
+
+        s.id AS student_id,
+        s.name AS student_name,
+
+        c.title AS course_name
+
+      FROM installments i
+
+      JOIN enrollments e
+      ON e.id = i.enrollment_id
+
+      JOIN students s
+      ON s.id = e.student_id
+
+      JOIN courses c
+      ON c.id = e.course_id
+
+      ORDER BY
+      i.status,
+      i.due_date;
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+app.post("/installments/pay", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { installment_id, payment_mode, transaction_id } = req.body;
+
+    const installment = await client.query(
+      `
+      SELECT *
+      FROM installments
+      WHERE id=$1
+      `,
+      [installment_id],
+    );
+
+    if (installment.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "Installment not found",
+      });
+    }
+
+    const data = installment.rows[0];
+
+    if (data.status === "Paid") {
+      await client.query("ROLLBACK");
+
+      return res.status(400).json({
+        message: "Already Paid",
+      });
+    }
+
+    await client.query(
+      `
+      INSERT INTO payments
+      (
+        enrollment_id,
+        amount,
+        payment_date,
+        payment_mode,
+        transaction_id,
+        installment_no,
+        status,
+        is_deleted
+      )
+      VALUES
+      (
+        $1,
+        $2,
+        CURRENT_DATE,
+        $3,
+        $4,
+        $5,
+        'paid',
+        false
+      )
+      `,
+      [
+        data.enrollment_id,
+        data.amount,
+        payment_mode,
+        transaction_id,
+        data.installment_no,
+      ],
+    );
+
+    await client.query(
+      `
+      UPDATE installments
+      SET
+      status='Paid',
+      paid_amount=amount
+      WHERE id=$1
+      `,
+      [installment_id],
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Installment Paid Successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    console.log(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/checkout/enroll", async (req, res) => {
+  try {
+    const { student_id, course_id, amount, payment_date } = req.body;
+
+    const studentId = Number(student_id);
+    const courseId = Number(course_id);
+    const amountValue = Number(amount);
+
+    if (!Number.isInteger(studentId) || studentId <= 0) {
+      return res.status(400).json({ message: "Invalid student" });
+    }
+
+    if (!Number.isInteger(courseId) || courseId <= 0) {
+      return res.status(400).json({ message: "Invalid course" });
+    }
+
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      return res.status(400).json({ message: "Invalid payment amount" });
+    }
+
+    const enrollmentResult = await pool.query(
       `INSERT INTO enrollments
        (student_id, course_id)
        VALUES ($1, $2)
        ON CONFLICT ON CONSTRAINT unique_student_course
        DO NOTHING
        RETURNING *`,
-      [student_id, course_id],
+      [studentId, courseId],
     );
 
-    if (result.rows.length === 0) {
-      return res.status(409).json({
-        message: "Student already enrolled in this course",
-      });
+    if (enrollmentResult.rows.length === 0) {
+      return res
+        .status(409)
+        .json({ message: "Student already enrolled in this course" });
     }
 
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error("ENROLL ERROR:", err.message);
+    const enrollmentId = enrollmentResult.rows[0].id;
 
-    res.status(500).json({
-      error: err.message,
+    await pool.query(
+      `INSERT INTO payments (enrollment_id, amount, payment_date, status, is_deleted)
+       VALUES ($1, $2, $3, 'paid', false)`,
+      [
+        enrollmentId,
+        amountValue,
+        payment_date || new Date().toISOString().split("T")[0],
+      ],
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Enrollment and payment completed successfully",
     });
+  } catch (err) {
+    console.error("CHECKOUT ENROLL ERROR:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -596,11 +1182,34 @@ app.get("/enrollments", async (req, res) => {
         e.id,
         s.name AS student_name,
         c.title AS course_name,
-        e.enrollment_date
+        e.enrollment_date,
+        e.status AS enrollment_status,
+
+        COALESCE(p.status, 'Pending') AS payment_status,
+        p.amount,
+        p.payment_date
+
       FROM enrollments e
-      JOIN students s ON s.id = e.student_id
-      JOIN courses c ON c.id = e.course_id
-      ORDER BY e.id DESC
+
+      JOIN students s
+        ON s.id = e.student_id
+
+      JOIN courses c
+        ON c.id = e.course_id
+
+      LEFT JOIN LATERAL (
+        SELECT
+          status,
+          amount,
+          payment_date
+        FROM payments
+        WHERE enrollment_id = e.id
+          AND is_deleted = false
+        ORDER BY payment_date DESC, id DESC
+        LIMIT 1
+      ) p ON true
+
+      ORDER BY e.id DESC;
     `);
 
     res.json(result.rows);
@@ -608,28 +1217,38 @@ app.get("/enrollments", async (req, res) => {
     console.error("GET ENROLLMENTS ERROR:", err);
 
     res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.delete("/enrollments/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM enrollments WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "Enrollment not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Enrollment deleted successfully",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
       error: err.message,
     });
   }
 });
 
 // JOIN QUERY
-app.get("/student/:id/courses", async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT s.name, c.title
-       FROM students s
-       JOIN enrollments e ON s.id = e.student_id
-       JOIN courses c ON c.id = e.course_id
-       WHERE s.id = $1`,
-      [req.params.id],
-    );
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // GET STUDENT ENROLLMENTS WITH COURSE ID
 app.get("/student/:id/enrollments", async (req, res) => {
@@ -645,6 +1264,7 @@ app.get("/student/:id/enrollments", async (req, res) => {
        FROM enrollments e
        JOIN courses c ON c.id = e.course_id
        WHERE e.student_id = $1
+         AND COALESCE(c.status, 'active') = 'active'
        ORDER BY e.enrollment_date DESC`,
       [req.params.id],
     );
@@ -662,51 +1282,71 @@ app.get("/student-dashboard/:studentId", verifyToken, async (req, res) => {
     console.log("Fetching dashboard for studentId:", studentId);
 
     const [courses, attendance, marks, payment] = await Promise.all([
+      // Total Courses
       pool.query(
-        `SELECT COUNT(*)::int AS count
-         FROM enrollments
-         WHERE student_id = $1`,
+        `
+        SELECT COUNT(*)::int AS count
+        FROM enrollments e
+        JOIN courses c ON c.id = e.course_id
+        WHERE e.student_id = $1
+          AND COALESCE(c.status, 'active') = 'active'
+        `,
         [studentId],
       ),
 
+      // Attendance Percentage
       pool.query(
-        `SELECT
-           COALESCE(
-             ROUND(
-               AVG(
-                 CASE
-                   WHEN LOWER(status) = 'present'
-                   THEN 100
-                   ELSE 0
-                 END
-               ),2
-             ),
-           0) AS attendance_percent
-         FROM attendance
-         WHERE student_id = $1`,
+        `
+        SELECT
+          COALESCE(
+            ROUND(
+              AVG(
+                CASE
+                  WHEN LOWER(status) = 'present' THEN 100
+                  ELSE 0
+                END
+              ),
+              2
+            ),
+            0
+          ) AS attendance_percent
+        FROM attendance
+        WHERE student_id = $1
+        `,
         [studentId],
       ),
 
+      // Average Marks
       pool.query(
-        `SELECT
-           COALESCE(
-             ROUND(
-               AVG(
-                 (marks_obtained::numeric / total_marks) * 100
-               ),2
-             ),
-           0) AS avg_marks
-         FROM marks
-         WHERE student_id = $1`,
+        `
+        SELECT
+          COALESCE(
+            ROUND(
+              AVG(
+                (marks_obtained::numeric / NULLIF(total_marks,0)) * 100
+              ),
+              2
+            ),
+            0
+          ) AS avg_marks
+        FROM marks
+        WHERE student_id = $1
+        `,
         [studentId],
       ),
 
+      // Latest Payment Status
       pool.query(
-        `SELECT status
-         FROM payments
-         WHERE student_id = $1
-         ORDER BY payment_date DESC
-         LIMIT 1`,
+        `
+        SELECT p.status
+        FROM payments p
+        INNER JOIN enrollments e
+          ON p.enrollment_id = e.id
+        WHERE e.student_id = $1
+          AND p.is_deleted = false
+        ORDER BY p.payment_date DESC, p.id DESC
+        LIMIT 1
+        `,
         [studentId],
       ),
     ]);
@@ -729,10 +1369,117 @@ app.get("/student-dashboard/:studentId", verifyToken, async (req, res) => {
     });
   }
 });
+// =========================
+// GET STUDENTS BY COURSE
+// =========================
 
+app.get("/courses/:id/students", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        s.id,
+        s.name,
+        s.email
+      FROM enrollments e
+      JOIN students s
+        ON s.id = e.student_id
+      WHERE e.course_id = $1
+      AND s.status='active'
+      ORDER BY s.name ASC
+      `,
+      [req.params.id],
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
 // =========================
 // ATTENDANCE API
 // =========================
+// =========================
+// BULK ATTENDANCE
+// =========================
+
+app.post("/attendance/bulk", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { course_id, attendance_date, records } = req.body;
+
+    await client.query("BEGIN");
+
+    for (const record of records) {
+      // Duplicate attendance check
+      const already = await client.query(
+        `
+        SELECT id
+        FROM attendance
+        WHERE
+        student_id=$1
+        AND course_id=$2
+        AND attendance_date=$3
+        `,
+
+        [record.student_id, course_id, attendance_date],
+      );
+
+      if (already.rows.length > 0) {
+        await client.query(
+          `
+          UPDATE attendance
+          SET status=$1
+          WHERE id=$2
+          `,
+
+          [record.status, already.rows[0].id],
+        );
+      } else {
+        await client.query(
+          `
+          INSERT INTO attendance
+          (
+            student_id,
+            course_id,
+            attendance_date,
+            status
+          )
+          VALUES
+          ($1,$2,$3,$4)
+          `,
+
+          [record.student_id, course_id, attendance_date, record.status],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+
+      message: "Attendance Saved Successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    console.error(err);
+
+    res.status(500).json({
+      success: false,
+
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 // ADD ATTENDANCE
 app.post("/attendance", async (req, res) => {
@@ -763,7 +1510,7 @@ app.get("/student/:id/attendance", async (req, res) => {
       `
       SELECT
         c.title AS course_name,
-
+        MAX(a.attendance_date) AS attendance_date,
         ROUND(
           AVG(
             CASE
@@ -772,20 +1519,27 @@ app.get("/student/:id/attendance", async (req, res) => {
               ELSE 0
             END
           ), 2
-        ) AS attendance_percent
-
+        ) AS attendance_percent,
+        COUNT(*) FILTER (WHERE LOWER(a.status) = 'present') AS present_count,
+        COUNT(*) AS total_days
       FROM attendance a
       JOIN courses c
         ON c.id = a.course_id
-
       WHERE a.student_id = $1
-
-      GROUP BY c.title
+      GROUP BY c.id, c.title
+      ORDER BY c.title
       `,
       [req.params.id],
     );
 
-    res.json(result.rows);
+    const formattedRows = result.rows.map((row) => ({
+      ...row,
+      attendance_percent: Number(row.attendance_percent || 0),
+      present_count: Number(row.present_count || 0),
+      total_days: Number(row.total_days || 0),
+    }));
+
+    res.json(formattedRows);
   } catch (err) {
     console.error(err);
 
@@ -810,6 +1564,29 @@ app.get("/attendance", async (req, res) => {
   `);
 
   res.json(result.rows);
+});
+app.get("/attendance/:studentId", async (req, res) => {
+  const { studentId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+          a.student_id,
+          a.attendance_date,
+          a.status,
+          c.title AS course_name
+       FROM attendance a
+       JOIN courses c ON c.id = a.course_id
+       WHERE a.student_id = $1
+       ORDER BY a.attendance_date DESC`,
+      [studentId],
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 app.put("/attendance/:id", async (req, res) => {
@@ -852,6 +1629,97 @@ app.delete("/attendance/:id", async (req, res) => {
     });
   }
 });
+// ============================
+// BULK ADD MARKS
+// ============================
+
+app.post("/marks/bulk", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { course_id, records } = req.body;
+
+    await client.query("BEGIN");
+
+    for (const record of records) {
+      const percentage =
+        Number(record.total_marks) === 0
+          ? 0
+          : (Number(record.marks_obtained) / Number(record.total_marks)) * 100;
+
+      // Check if marks already exist
+      const existing = await client.query(
+        `
+        SELECT id
+        FROM marks
+        WHERE
+        student_id=$1
+        AND course_id=$2
+        `,
+        [record.student_id, course_id],
+      );
+
+      if (existing.rows.length > 0) {
+        await client.query(
+          `
+          UPDATE marks
+          SET
+          marks_obtained=$1,
+          total_marks=$2,
+          percentage=$3
+          WHERE id=$4
+          `,
+          [
+            record.marks_obtained,
+            record.total_marks,
+            percentage.toFixed(2),
+            existing.rows[0].id,
+          ],
+        );
+      } else {
+        await client.query(
+          `
+          INSERT INTO marks
+          (
+            student_id,
+            course_id,
+            marks_obtained,
+            total_marks,
+            percentage
+          )
+          VALUES
+          ($1,$2,$3,$4,$5)
+          `,
+          [
+            record.student_id,
+            course_id,
+            record.marks_obtained,
+            record.total_marks,
+            percentage.toFixed(2),
+          ],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Marks Saved Successfully",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    console.error(err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 app.post("/marks", async (req, res) => {
   try {
@@ -882,20 +1750,17 @@ app.get("/student/:id/marks", async (req, res) => {
   try {
     const result = await pool.query(
       `
-      SELECT
-        m.id,
-        c.title AS course_name,
-        m.marks_obtained,
-        m.total_marks,
-        ROUND(
-          (m.marks_obtained::numeric / m.total_marks) * 100,
-          2
-        ) AS percentage
-      FROM marks m
-      JOIN courses c
-        ON m.course_id = c.id
-      WHERE m.student_id = $1
-      ORDER BY m.id DESC
+   SELECT
+  m.id,
+  c.title AS course_name,
+  m.marks_obtained,
+  m.total_marks,
+  m.created_at,
+  ROUND((m.marks_obtained::numeric / m.total_marks) * 100, 2) AS percentage
+FROM marks m
+JOIN courses c ON m.course_id = c.id
+WHERE m.student_id = $1
+ORDER BY m.id DESC;
       `,
       [req.params.id],
     );
@@ -912,16 +1777,17 @@ app.get("/student/:id/marks", async (req, res) => {
 
 app.get("/marks", async (req, res) => {
   const result = await pool.query(`
-    SELECT
-      m.id,
-      s.name AS student_name,
-      c.title AS course_name,
-      m.marks_obtained,
-      m.total_marks
-    FROM marks m
-    JOIN students s ON s.id = m.student_id
-    JOIN courses c ON c.id = m.course_id
-    ORDER BY m.id DESC
+   SELECT
+  m.id,
+  s.name AS student_name,
+  c.title AS course_name,
+  m.marks_obtained,
+  m.total_marks,
+  m.created_at
+FROM marks m
+JOIN students s ON s.id = m.student_id
+JOIN courses c ON c.id = m.course_id
+ORDER BY m.id DESC;
   `);
 
   res.json(result.rows);
@@ -933,9 +1799,10 @@ app.put("/marks/:id", async (req, res) => {
 
     const result = await pool.query(
       `UPDATE marks
-       SET marks_obtained=$1,
-           total_marks=$2
-       WHERE id=$3
+SET marks_obtained=$1,
+    total_marks=$2,
+    percentage=$3
+WHERE id=$4
        RETURNING *`,
       [marks_obtained, total_marks, req.params.id],
     );
@@ -969,78 +1836,143 @@ app.delete("/marks/:id", async (req, res) => {
   }
 });
 
-app.post("/payments", async (req, res) => {
-  try {
-    const { student_id, course_id, amount, payment_date, status } = req.body;
-
-    const result = await pool.query(
-      `INSERT INTO payments
-      (
-        student_id,
-        course_id,
-        amount,
-        payment_date,
-        status
-      )
-      VALUES ($1,$2,$3,$4,$5)
-      RETURNING *`,
-      [student_id, course_id, amount, payment_date, status],
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({
-      error: err.message,
-    });
-  }
-});
-
 app.get("/payments", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
         p.id,
+        e.id AS enrollment_id,
         s.name AS student_name,
         c.title AS course_name,
+        c.fee AS course_fee,
         p.amount,
         p.payment_date,
-        p.status
+        p.status,
+
+        -- Total paid till this payment
+        (
+          SELECT COALESCE(SUM(p2.amount), 0)
+          FROM payments p2
+          WHERE p2.enrollment_id = p.enrollment_id
+            AND COALESCE(p2.is_deleted, false) = false
+            AND (
+              p2.payment_date < p.payment_date
+              OR (
+                p2.payment_date = p.payment_date
+                AND p2.id <= p.id
+              )
+            )
+        ) AS total_paid,
+
+        -- Remaining after this payment
+        (
+          c.fee -
+          (
+            SELECT COALESCE(SUM(p2.amount), 0)
+            FROM payments p2
+            WHERE p2.enrollment_id = p.enrollment_id
+              AND COALESCE(p2.is_deleted, false) = false
+              AND (
+                p2.payment_date < p.payment_date
+                OR (
+                  p2.payment_date = p.payment_date
+                  AND p2.id <= p.id
+                )
+              )
+          )
+        ) AS remaining_amount
+
       FROM payments p
-      JOIN students s
-        ON p.student_id = s.id
-      JOIN courses c
-        ON p.course_id = c.id
-      ORDER BY p.id DESC
+      JOIN enrollments e ON e.id = p.enrollment_id
+      JOIN students s ON s.id = e.student_id
+      JOIN courses c ON c.id = e.course_id
+
+      WHERE COALESCE(p.is_deleted, false) = false
+
+      ORDER BY p.payment_date DESC, p.id DESC;
     `);
 
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({
-      error: err.message,
-    });
+    console.error(err);
+    res.status(500).json({ message: "Server Error" });
   }
 });
 
-app.put("/payments/:id", async (req, res) => {
+// CREATE PAYMENT
+app.post("/payments", async (req, res) => {
   try {
-    const { amount, status } = req.body;
+    const { enrollment_id, amount, payment_date } = req.body;
 
-    const result = await pool.query(
-      `UPDATE payments
-       SET amount=$1,
-           status=$2
-       WHERE id=$3
-       RETURNING *`,
-      [amount, status, req.params.id],
+    const enrollmentId = Number(enrollment_id);
+    const amountValue = Number(amount);
+
+    if (!enrollmentId || amountValue <= 0) {
+      return res.status(400).json({ message: "Invalid data" });
+    }
+
+    await pool.query(
+      `INSERT INTO payments (enrollment_id, amount, payment_date, status, is_deleted)
+       VALUES ($1, $2, $3, 'paid', false)`,
+      [enrollmentId, amountValue, payment_date],
     );
 
-    res.json(result.rows[0]);
+    res.json({ message: "Payment added successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// RESTORE PAYMENT (UNDO)
+app.put("/payments/undo/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE payments
+       SET is_deleted = false
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id],
+    );
+
+    res.json({
+      success: true,
+      message: "Payment restored",
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// SOFT DELETE
 app.delete("/payments/:id", async (req, res) => {
+  try {
+    const paymentId = Number(req.params.id);
+
+    if (!Number.isInteger(paymentId) || paymentId <= 0) {
+      return res.status(400).json({ error: "Invalid payment id" });
+    }
+
+    const result = await pool.query(
+      `UPDATE payments
+       SET is_deleted = true
+       WHERE id = $1 AND COALESCE(is_deleted, false) = false
+       RETURNING *`,
+      [paymentId],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Payment not found" });
+    }
+
+    res.json({ message: "Payment deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// HARD DELETE (optional)
+app.delete("/payments/hard/:id", async (req, res) => {
   try {
     const result = await pool.query(
       "DELETE FROM payments WHERE id=$1 RETURNING *",
@@ -1048,18 +1980,12 @@ app.delete("/payments/:id", async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        message: "Payment not found",
-      });
+      return res.status(404).json({ message: "Payment not found" });
     }
 
-    res.json({
-      message: "Payment deleted",
-    });
+    res.json({ message: "Payment permanently deleted" });
   } catch (err) {
-    res.status(500).json({
-      error: err.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1096,6 +2022,21 @@ app.get("/reports", async (req, res) => {
       COALESCE(AVG(amount),0) AS average_payment
       FROM payments
     `);
+
+    const pending = await pool.query(`
+  SELECT 
+    COALESCE((
+      SELECT SUM(c.fee)
+      FROM enrollments e
+      JOIN courses c ON c.id = e.course_id
+    ),0)
+    -
+    COALESCE((
+      SELECT SUM(amount)
+      FROM payments
+    ),0)
+    AS pending
+`);
 
     // Marks Analytics
     const marksStats = await pool.query(`
@@ -1187,7 +2128,7 @@ app.get("/reports", async (req, res) => {
 
       averagePayment: Number(paymentStats.rows[0].average_payment).toFixed(2),
 
-      pendingPayments: 0,
+      pendingPayments: Number(pending.rows[0].pending || 0),
     });
   } catch (err) {
     console.error(err);
@@ -1213,18 +2154,21 @@ app.get("/student/:id/payments", async (req, res) => {
   try {
     const result = await pool.query(
       `
-      SELECT
-        p.id,
-        c.title AS course_name,
-        p.amount,
-        p.payment_date,
-        p.status
-      FROM payments p
-      JOIN courses c
-        ON p.course_id = c.id
-      WHERE p.student_id = $1
-      ORDER BY p.payment_date DESC
-      `,
+  SELECT
+    p.id,
+    c.title AS course_name,
+    p.amount,
+    p.payment_date,
+    p.status
+  FROM payments p
+  JOIN enrollments e
+    ON p.enrollment_id = e.id
+  JOIN courses c
+    ON e.course_id = c.id
+  WHERE e.student_id = $1
+    AND p.is_deleted = false
+  ORDER BY p.payment_date DESC, p.id DESC
+  `,
       [req.params.id],
     );
 
@@ -1267,6 +2211,40 @@ app.get("/classes", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/classes/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT
+        c.*,
+        co.title AS course_name
+      FROM classes c
+      JOIN courses co
+      ON c.course_id = co.id
+      WHERE c.id = $1
+      `,
+      [id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
 
 app.get("/courses/:id/classes", async (req, res) => {
   try {
@@ -1283,30 +2261,44 @@ app.get("/courses/:id/classes", async (req, res) => {
 
 app.put("/classes/:id", async (req, res) => {
   try {
-    const { title, video_url, description } = req.body;
+    const { course_id, title, video_url, description } = req.body;
 
     const result = await pool.query(
-      `UPDATE classes
-       SET title=$1, video_url=$2, description=$3
-       WHERE id=$4
-       RETURNING *`,
-      [title, video_url, description, req.params.id],
+      `
+      UPDATE classes
+      SET
+        course_id = $1,
+        title = $2,
+        video_url = $3,
+        description = $4
+      WHERE id = $5
+      RETURNING *
+      `,
+      [course_id, title, video_url, description, req.params.id],
     );
 
-    res.json({ success: true, data: result.rows[0] });
+    res.json({
+      success: true,
+      data: result.rows[0],
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
-app.delete("/classes/:id", async (req, res) => {
-  try {
-    await pool.query(`DELETE FROM classes WHERE id=$1`, [req.params.id]);
+app.delete("/courses/:id", async (req, res) => {
+  const { id } = req.params;
 
-    res.json({ success: true, message: "Class deleted" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  await pool.query(
+    `UPDATE courses 
+     SET is_deleted = true 
+     WHERE id = $1`,
+    [id],
+  );
+
+  res.json({ message: "Course deleted successfully" });
 });
 
 app.get("/classes/course/:courseId", async (req, res) => {
@@ -1504,6 +2496,318 @@ ${message}
 
     res.status(500).json({
       error: err.message,
+    });
+  }
+});
+
+app.post("/undo", async (req, res) => {
+  try {
+    const action = popAction();
+
+    if (!action) {
+      return res.json({
+        success: false,
+        message: "Nothing to undo",
+      });
+    }
+
+    // Undo Delete -> Active karo
+    if (action.type === "DELETE") {
+      await pool.query(
+        `
+        UPDATE students
+        SET status = 'active'
+        WHERE id = $1
+        `,
+        [action.student.id],
+      );
+    }
+
+    // Undo Add -> Inactive karo
+    else if (action.type === "ADD") {
+      await pool.query(
+        `
+        UPDATE students
+        SET status = 'inactive'
+        WHERE id = $1
+        `,
+        [action.student.id],
+      );
+    }
+
+    // Undo Update -> Purana data restore karo
+    else if (action.type === "UPDATE") {
+      const s = action.student;
+
+      await pool.query(
+        `
+        UPDATE students
+        SET
+          name = $1,
+          email = $2,
+          phone = $3,
+          address = $4,
+          status = $5
+        WHERE id = $6
+        `,
+        [s.name, s.email, s.phone, s.address, s.status, s.id],
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Undo successful",
+    });
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/queue", (req, res) => {
+  res.json(getQueue());
+});
+
+app.post("/queue/process", (req, res) => {
+  const item = dequeue();
+
+  if (!item) {
+    return res.json({
+      message: "Queue Empty",
+    });
+  }
+
+  res.json({
+    processed: item,
+  });
+});
+
+app.patch("/courses/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const course = await pool.query(
+      "SELECT status FROM courses WHERE id = $1",
+      [id],
+    );
+
+    if (course.rows.length === 0) {
+      return res.status(404).json({ message: "Course not found" });
+    }
+
+    const currentStatus = String(course.rows[0].status || "inactive")
+      .trim()
+      .toLowerCase();
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+
+    const updated = await pool.query(
+      "UPDATE courses SET status = $1 WHERE id = $2 RETURNING *",
+      [newStatus, id],
+    );
+
+    res.json({
+      message: "Status updated",
+      status: newStatus,
+      data: updated.rows[0],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/students/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Student basic info
+    const studentResult = await pool.query(
+      `SELECT id, name, email, phone, status
+       FROM students
+       WHERE id = $1`,
+      [id],
+    );
+
+    if (studentResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const student = studentResult.rows[0];
+
+    // 2. Courses separately (IMPORTANT FIX)
+    const courseResult = await pool.query(
+      `SELECT c.id, c.title
+       FROM courses c
+       JOIN enrollments e ON e.course_id = c.id
+       WHERE e.student_id = $1`,
+      [id],
+    );
+
+    // 3. Response merge
+    res.json({
+      success: true,
+      data: {
+        ...student,
+
+        // real course list
+        courses: courseResult.rows,
+
+        // optional UI fields (can later move to DB)
+        advisor: "Rahul Sharma",
+        attendance: 92,
+        avgMarks: 84,
+        feeStatus: "Paid",
+        completedCourses: courseResult.rows.length,
+
+        activities: [
+          { title: "Course Enrolled", date: "2 days ago" },
+          { title: "Attendance Updated", date: "Yesterday" },
+          { title: "Fee Paid", date: "Today" },
+        ],
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+});
+
+app.put("/students/:id", async (req, res) => {
+  const { name, email, phone } = req.body;
+
+  const result = await pool.query(
+    `UPDATE students 
+     SET name=$1, email=$2, phone=$3 
+     WHERE id=$4 
+     RETURNING id, name, email, phone`,
+    [name, email, phone, req.params.id],
+  );
+
+  res.json({
+    success: true,
+    data: result.rows[0], // 🔥 return updated data
+  });
+});
+
+app.put("/students/:id/password", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { oldPassword, newPassword } = req.body;
+
+    // 1. GET password from USERS table (NOT students)
+    const user = await pool.query(
+      `SELECT u.password
+       FROM users u
+       JOIN students s ON s.user_id = u.id
+       WHERE s.id = $1`,
+      [id],
+    );
+
+    if (user.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    // 2. Check old password
+    const valid = await bcrypt.compare(oldPassword, user.rows[0].password);
+
+    if (!valid) {
+      return res.status(400).json({
+        success: false,
+        message: "Old password is incorrect",
+      });
+    }
+
+    // 3. Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // 4. Update USERS table (NOT students)
+    await pool.query(
+      `UPDATE users u
+       SET password = $1
+       FROM students s
+       WHERE s.user_id = u.id AND s.id = $2`,
+      [hashedPassword, id],
+    );
+
+    res.json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
+
+app.get("/student/:id/courses", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT
+          e.id AS enrollment_id,
+          c.id,
+          c.title,
+          c.duration,
+          c.fee,
+          c.status,
+          e.enrollment_date,
+
+          COALESCE(p.total_paid, 0) AS amount,
+
+          (c.fee - COALESCE(p.total_paid, 0)) AS remaining_amount,
+
+          COALESCE(p.last_status, 'Pending') AS payment_status,
+
+          p.last_payment_date AS payment_date
+
+      FROM enrollments e
+
+      JOIN courses c
+        ON c.id = e.course_id
+
+      LEFT JOIN (
+          SELECT
+              enrollment_id,
+              SUM(amount) AS total_paid,
+              MAX(payment_date) AS last_payment_date,
+              (
+                  ARRAY_AGG(status ORDER BY payment_date DESC, id DESC)
+              )[1] AS last_status
+          FROM payments
+          WHERE is_deleted = false
+          GROUP BY enrollment_id
+      ) p
+      ON p.enrollment_id = e.id
+
+      WHERE
+          e.student_id = $1
+          AND COALESCE(c.status, 'active') = 'active'
+      `,
+      [id],
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Server Error",
     });
   }
 });

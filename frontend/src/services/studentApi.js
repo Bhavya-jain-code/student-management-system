@@ -1,12 +1,20 @@
 import api from "./axiosInstance";
 
-export const getStudents = async (page = 1) => {
-  const res = await api.get(`/students?page=${page}`);
+export const getStudents = async (page = 1, search = "", sort = "latest") => {
+  const res = await api.get(
+    `/students?page=${page}&search=${search}&sort=${sort}`,
+  );
+
   return res.data;
 };
 
 export const deleteStudent = async (id) => {
   const res = await api.delete(`/students/${id}`);
+  return res.data;
+};
+
+export const undoStudent = async (id) => {
+  const res = await api.put(`/students/${id}/undo`);
   return res.data;
 };
 

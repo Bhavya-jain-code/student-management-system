@@ -3,17 +3,26 @@ import Sidebar from "../../components/Sidebar";
 
 function AdminLayout({ children }) {
   return (
-    <>
-      <Navbar />
+    <div className="h-screen flex flex-col overflow-hidden">
 
-      <div className="flex">
+      {/* Navbar */}
+      <div className="h-16 shrink-0">
+        <Navbar />
+      </div>
+
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* Sidebar */}
         <Sidebar />
 
-        <div className="flex-1 p-5">
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
           {children}
         </div>
+
       </div>
-    </>
+    </div>
   );
 }
 

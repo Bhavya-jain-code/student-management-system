@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { getCourseClasses } from "../../services/classApi";
 import { getStudentEnrollments } from "../../services/enrollmentApi";
+
 
 export default function MyClassesPage() {
   const [classes, setClasses] = useState([]);
@@ -9,7 +11,7 @@ export default function MyClassesPage() {
   const [error, setError] = useState(null);
 
   const studentId = localStorage.getItem("student_id");
-
+const { id } = useParams();
   useEffect(() => {
     loadClassesData();
   }, []);
@@ -43,38 +45,35 @@ export default function MyClassesPage() {
 
       console.log("Loading classes for studentId:", studentId);
 
-      // Get all enrolled courses
-      const enrollmentsRes = await getStudentEnrollments(studentId);
-      console.log("Student Enrollments:", enrollmentsRes);
+     const enrollmentsRes = await getStudentEnrollments(studentId);
 
-      if (!enrollmentsRes?.data || enrollmentsRes.data.length === 0) {
-        setCourses([]);
-        setClasses([]);
-        return;
-      }
+if (!enrollmentsRes?.data) {
+  setCourses([]);
+  setClasses([]);
+  return;
+}
 
-      setCourses(enrollmentsRes.data);
+const selectedCourse = enrollmentsRes.data.find(
+  (c) => String(c.course_id) === String(id)
+);
 
-      // Fetch classes for each course
-      const allClasses = [];
-      for (const course of enrollmentsRes.data) {
-        try {
-          const classesRes = await getCourseClasses(course.course_id);
-          if (classesRes?.data) {
-            // Add course_name to each class
-            const classesWithCourse = classesRes.data.map((cls) => ({
-              ...cls,
-              course_name: course.course_name,
-              course_id: course.course_id,
-            }));
-            allClasses.push(...classesWithCourse);
-          }
-        } catch (err) {
-          console.log(`Error loading classes for course ${course.course_id}:`, err);
-        }
-      }
+if (!selectedCourse) {
+  setCourses([]);
+  setClasses([]);
+  return;
+}
 
-      setClasses(allClasses);
+setCourses([selectedCourse]);
+
+const classesRes = await getCourseClasses(id);
+
+setClasses(
+  (classesRes.data || []).map((cls) => ({
+    ...cls,
+    course_name: selectedCourse.course_name,
+    course_id: selectedCourse.course_id,
+  }))
+);
     } catch (err) {
       console.error("Error loading classes:", err);
       setError("Failed to load classes. Please try again.");

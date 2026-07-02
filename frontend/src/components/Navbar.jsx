@@ -10,7 +10,7 @@ function Navbar() {
   };
 
   return (
-    <nav className="bg-blue-500 text-white px-6 py-4 flex justify-between items-center">
+    <nav className="fixed top-0 left-0 right-0 z-50 h-16 bg-blue-500 text-white px-6 flex justify-between items-center shadow">
       <h1 className="text-xl font-bold">
         Student Management System
       </h1>
@@ -24,7 +24,7 @@ function Navbar() {
         ) : (
           <>
             
-            <button onClick={handleLogout}>Logout</button>
+            <button className="bg-red-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-600 transition" onClick={handleLogout}>Logout</button>
           </>
         )}
       </div>

@@ -2,41 +2,29 @@ import { useEffect, useState } from "react";
 import api from "../services/axiosInstance";
 
 function AddPaymentPage() {
-  const [students, setStudents] = useState([]);
-  const [courses, setCourses] = useState([]);
+  const [enrollments, setEnrollments] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  const today = new Date().toISOString().split("T")[0];
+
   const [formData, setFormData] = useState({
-    student_id: "",
-    course_id: "",
+    enrollment_id: "",
     amount: "",
-    payment_date: "",
-    status: "Paid",
+    payment_date: today,
   });
 
-  // Load Students + Courses dynamically
   useEffect(() => {
-    loadStudents();
-    loadCourses();
+    loadEnrollments();
   }, []);
 
-  const loadStudents = async () => {
+  async function loadEnrollments() {
     try {
-      const res = await api.get("/students");
-      setStudents(res.data?.data || []);
+      const res = await api.get("/enrollments");
+      setEnrollments(res.data);
     } catch (err) {
       console.log(err);
     }
-  };
-
-  const loadCourses = async () => {
-    try {
-      const res = await api.get("/courses");
-      setCourses(res.data || []);
-    } catch (err) {
-      console.log(err);
-    }
-  };
+  }
 
   function handleChange(e) {
     setFormData({
@@ -45,155 +33,191 @@ function AddPaymentPage() {
     });
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+async function handleSubmit(e) {
+  e.preventDefault();
 
-    try {
-      setLoading(true);
+  const enrollmentId = Number(formData.enrollment_id);
+  const amountValue = Number(formData.amount);
 
-      await api.post("/payments", formData);
-
-      alert("✅ Payment Added Successfully");
-
-      setFormData({
-        student_id: "",
-        course_id: "",
-        amount: "",
-        payment_date: "",
-        status: "Paid",
-      });
-    } catch (error) {
-      console.error(error);
-      alert("❌ Error adding payment");
-    } finally {
-      setLoading(false);
-    }
+  if (!Number.isInteger(enrollmentId) || enrollmentId <= 0) {
+    alert("Please select a valid student and course.");
+    return;
   }
+
+  if (!Number.isFinite(amountValue) || amountValue <= 0) {
+    alert("Please enter a valid payment amount.");
+    return;
+  }
+
+  try {
+    setLoading(true);
+
+    await api.post("/payments", {
+      enrollment_id: enrollmentId,
+      amount: amountValue,
+      payment_date: formData.payment_date || today,
+      status: "paid",
+    });
+
+    alert("Payment Added Successfully");
+
+    setFormData({
+      enrollment_id: "",
+      amount: "",
+      payment_date: today,
+      status: "paid",
+    });
+  } catch (error) {
+    console.error(error);
+    alert(error?.response?.data?.error || "Error");
+  } finally {
+    setLoading(false);
+  }
+}
 
   return (
     <div style={containerStyle}>
       <div style={cardStyle}>
-        <h1 style={titleStyle}>💰 Add Payment</h1>
+        <div style={headerStyle}>
+          <h2 style={titleStyle}>💳 Add Payment</h2>
+          <p style={subTitleStyle}>
+            Record student payment quickly and securely.
+          </p>
+        </div>
 
         <form onSubmit={handleSubmit} style={formStyle}>
-          {/* STUDENT DROPDOWN */}
-          <select
-            name="student_id"
-            value={formData.student_id}
-            onChange={handleChange}
-            style={inputStyle}
-            required
+
+          <div>
+            <label style={labelStyle}>Student & Course</label>
+            <select
+              name="enrollment_id"
+              value={formData.enrollment_id}
+              onChange={handleChange}
+              style={inputStyle}
+              required
+            >
+              <option value="">Select Student</option>
+
+              {enrollments.map((item) => (
+                <option
+                  key={item.id || item.enrollment_id}
+                  value={item.id || item.enrollment_id}
+                >
+                  {item.student_name} • {item.course_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Amount (₹)</label>
+            <input
+              type="number"
+              name="amount"
+              placeholder="Enter payment amount"
+              value={formData.amount}
+              onChange={handleChange}
+              style={inputStyle}
+              required
+            />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Payment Date</label>
+            <input
+              type="date"
+              name="payment_date"
+              value={formData.payment_date}
+              onChange={handleChange}
+              style={inputStyle}
+            />
+          </div>
+
+          <button
+            type="submit"
+            style={btnStyle}
+            disabled={loading}
           >
-            <option value="">Select Student</option>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-
-          {/* COURSE DROPDOWN */}
-          <select
-            name="course_id"
-            value={formData.course_id}
-            onChange={handleChange}
-            style={inputStyle}
-            required
-          >
-            <option value="">Select Course</option>
-            {courses.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="number"
-            name="amount"
-            placeholder="Amount"
-            value={formData.amount}
-            onChange={handleChange}
-            style={inputStyle}
-            required
-          />
-
-          <input
-            type="date"
-            name="payment_date"
-            value={formData.payment_date}
-            onChange={handleChange}
-            style={inputStyle}
-            required
-          />
-
-          <select
-            name="status"
-            value={formData.status}
-            onChange={handleChange}
-            style={inputStyle}
-          >
-            <option value="Paid">Paid</option>
-            <option value="Pending">Pending</option>
-          </select>
-
-          <button type="submit" style={btnStyle} disabled={loading}>
-            {loading ? "Saving..." : "Save Payment"}
+            {loading ? "Saving..." : "💰 Save Payment"}
           </button>
+
         </form>
       </div>
     </div>
   );
 }
 
-/* ================= STYLES ================= */
+/* ===================== Styles ===================== */
 
 const containerStyle = {
   minHeight: "100vh",
-  background: "#f4f7fc",
+  background: "linear-gradient(135deg,#eef2ff,#dbeafe)",
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
-  padding: "20px",
+  padding: "30px",
 };
 
 const cardStyle = {
   width: "100%",
-  maxWidth: "500px",
-  background: "white",
-  padding: "30px",
-  borderRadius: "15px",
-  boxShadow: "0 8px 20px rgba(0,0,0,0.1)",
+  maxWidth: "520px",
+  background: "#fff",
+  borderRadius: "20px",
+  padding: "35px",
+  boxShadow: "0 15px 40px rgba(0,0,0,.12)",
+};
+
+const headerStyle = {
+  textAlign: "center",
+  marginBottom: "30px",
 };
 
 const titleStyle = {
-  marginBottom: "20px",
-  textAlign: "center",
-  color: "#1f2937",
+  margin: 0,
+  color: "#1e3a8a",
+  fontSize: "30px",
+  fontWeight: "700",
+};
+
+const subTitleStyle = {
+  marginTop: "8px",
+  color: "#6b7280",
+  fontSize: "14px",
 };
 
 const formStyle = {
   display: "flex",
   flexDirection: "column",
-  gap: "15px",
+  gap: "20px",
+};
+
+const labelStyle = {
+  display: "block",
+  marginBottom: "8px",
+  fontWeight: "600",
+  color: "#374151",
 };
 
 const inputStyle = {
-  padding: "12px",
-  borderRadius: "8px",
-  border: "1px solid #ddd",
-  outline: "none",
-  fontSize: "14px",
+  width: "100%",
+  padding: "13px 15px",
+  border: "1px solid #d1d5db",
+  borderRadius: "10px",
+  fontSize: "15px",
+  boxSizing: "border-box",
 };
 
 const btnStyle = {
-  padding: "12px",
-  background: "#2563eb",
-  color: "white",
+  marginTop: "10px",
+  padding: "14px",
   border: "none",
-  borderRadius: "8px",
+  borderRadius: "10px",
+  background: "linear-gradient(90deg,#2563eb,#1d4ed8)",
+  color: "#fff",
+  fontSize: "16px",
+  fontWeight: "600",
   cursor: "pointer",
-  fontWeight: "bold",
+  transition: ".3s",
 };
 
 export default AddPaymentPage;

@@ -1,262 +1,325 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getStudents,
   deleteStudent,
+  undoStudent,
 } from "../services/studentApi";
 
 function StudentListPage() {
+  const navigate = useNavigate();
+
   const [students, setStudents] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("latest");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  const navigate = useNavigate();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalStudents, setTotalStudents] = useState(0);
+
+  const [deletedStudent, setDeletedStudent] = useState(null);
+  const [showUndo, setShowUndo] = useState(false);
 
   useEffect(() => {
     loadStudents();
-  }, [currentPage]);
+  }, [currentPage, search, sort]);
 
   async function loadStudents() {
-    try {
-      const response = await getStudents(currentPage);
+    setLoading(true);
 
-      setStudents(response.data || []);
-      setTotalPages(response.totalPages || 1);
+    try {
+      const res = await getStudents(currentPage, search, sort);
+
+      setStudents(res.data || []);
+      setTotalPages(res.totalPages || 1);
+      setTotalStudents(res.total || 0);
     } catch (err) {
       console.error(err);
-      setStudents([]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function handleDelete(id) {
-    await deleteStudent(id);
-    loadStudents();
+  async function handleDelete(student) {
+    try {
+      await deleteStudent(student.id);
+
+      setDeletedStudent(student);
+
+      setStudents((prev) => prev.filter((s) => s.id !== student.id));
+
+      setShowUndo(true);
+
+      setTimeout(() => {
+        setShowUndo(false);
+        setDeletedStudent(null);
+      }, 8000);
+    } catch (err) {
+      console.error(err);
+    }
   }
 
-  const filteredStudents = [...students]
-    .filter((student) => {
-      return (
-        student.name
-          ?.toLowerCase()
-          .includes(search.toLowerCase()) ||
-        student.email
-          ?.toLowerCase()
-          .includes(search.toLowerCase())
-      );
-    })
-    .sort((a, b) => {
-      if (sort === "name") {
-        return a.name.localeCompare(b.name);
-      }
+  async function undoDelete() {
+    if (!deletedStudent) return;
 
-      if (sort === "oldest") {
-        return a.id - b.id;
-      }
+    try {
+      await undoStudent(deletedStudent.id);
 
-      return b.id - a.id;
+      loadStudents();
+
+      setDeletedStudent(null);
+      setShowUndo(false);
+    } catch (err) {
+      console.error(err);
+      alert("Undo failed");
+    }
+  }
+
+  const filteredStudents = useMemo(() => {
+    return students.filter((s) => {
+      if (statusFilter === "all") return true;
+      return s.status === statusFilter;
     });
+  }, [students, statusFilter]);
+
+  const startRecord =
+    totalStudents === 0 ? 0 : (currentPage - 1) * 5 + 1;
+
+  const endRecord = Math.min(currentPage * 5, totalStudents);
 
   return (
-    <div className="p-6">
+    <div className="min-h-screen bg-gray-50 p-6">
 
       {/* Header */}
-      <div className="flex justify-between items-center mb-6">
+
+      <div className="flex items-center justify-between mb-6">
+
         <div>
-          <h1 className="text-3xl font-bold text-gray-800">
-            Students Management
+          <h1 className="text-3xl font-bold">
+            Students
           </h1>
-          <p className="text-gray-500">
-            Manage all registered students
+
+          <p className="text-gray-500 mt-1">
+            Manage all students
           </p>
         </div>
 
         <button
           onClick={() => navigate("/pages/addStudent")}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl font-medium shadow-lg"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl font-semibold shadow"
         >
           + Add Student
         </button>
+
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-        <div className="bg-white rounded-2xl shadow-md p-5">
-          <p className="text-gray-500">Current Page Records</p>
-          <h2 className="text-3xl font-bold text-blue-600">
-            {students.length}
-          </h2>
-        </div>
+      {/* Undo */}
 
-        <div className="bg-white rounded-2xl shadow-md p-5">
-          <p className="text-gray-500">Search Results</p>
-          <h2 className="text-3xl font-bold text-green-600">
-            {filteredStudents.length}
-          </h2>
-        </div>
+      {showUndo && (
+        <div className="bg-yellow-100 border border-yellow-300 rounded-xl p-4 flex justify-between items-center mb-5">
 
-        <div className="bg-white rounded-2xl shadow-md p-5">
-          <p className="text-gray-500">Total Pages</p>
-          <h2 className="text-3xl font-bold text-purple-600">
-            {totalPages}
-          </h2>
-        </div>
-      </div>
+          <span>
+            Student deleted successfully.
+          </span>
 
-      {/* Search + Sort */}
-      <div className="bg-white rounded-2xl shadow-md p-5 mb-6 flex flex-col md:flex-row gap-4 justify-between">
+          <button
+            onClick={undoDelete}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+          >
+            Undo
+          </button>
+
+        </div>
+      )}
+
+      {/* Filters */}
+
+      <div className="grid md:grid-cols-3 gap-4 mb-6">
+
         <input
           type="text"
           placeholder="Search by name or email..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="border rounded-xl px-4 py-3 w-full md:w-96 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onChange={(e) => {
+            setCurrentPage(1);
+            setSearch(e.target.value);
+          }}
+          className="border rounded-xl p-3"
         />
 
         <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          className="border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="border rounded-xl p-3"
         >
-          <option value="latest">Latest First</option>
-          <option value="oldest">Oldest First</option>
-          <option value="name">Name A-Z</option>
+          <option value="all">All Status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
         </select>
+
+        <select
+          value={sort}
+          onChange={(e) => {
+            setCurrentPage(1);
+            setSort(e.target.value);
+          }}
+          className="border rounded-xl p-3"
+        >
+          <option value="latest">Latest</option>
+          <option value="oldest">Oldest</option>
+          <option value="name">Name</option>
+        </select>
+
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-        <div className="p-5 border-b">
-          <h2 className="text-xl font-semibold">
-            Student List
-          </h2>
-        </div>
+      <div className="flex justify-between items-center mb-4">
 
-        <div className="overflow-x-auto">
+        <p className="text-gray-600">
+          Showing <b>{startRecord}</b> - <b>{endRecord}</b> of{" "}
+          <b>{totalStudents}</b> students
+        </p>
+
+        <p className="text-gray-600">
+          Page <b>{currentPage}</b> / <b>{totalPages}</b>
+        </p>
+
+      </div>
+
+      {/* TABLE */}
+            <div className="bg-white rounded-xl shadow overflow-hidden">
+
+        {loading ? (
+          <div className="p-10 text-center text-lg font-medium">
+            Loading...
+          </div>
+        ) : filteredStudents.length === 0 ? (
+          <div className="p-10 text-center text-gray-500">
+            No Students Found
+          </div>
+        ) : (
           <table className="w-full">
-            <thead>
-              <tr className="bg-gray-100 text-gray-700">
+            <thead className="bg-gray-100">
+              <tr>
                 <th className="p-4 text-left">ID</th>
                 <th className="p-4 text-left">Name</th>
                 <th className="p-4 text-left">Email</th>
                 <th className="p-4 text-left">Phone</th>
+                <th className="p-4 text-left">Status</th>
                 <th className="p-4 text-center">Actions</th>
               </tr>
             </thead>
 
             <tbody>
-              {filteredStudents.length > 0 ? (
-                filteredStudents.map((student) => (
-                  <tr
-                    key={student.id}
-                    className="border-b hover:bg-blue-50 transition"
-                  >
-                    <td className="p-4 font-medium">
-                      #{student.id}
-                    </td>
+              {filteredStudents.map((s) => (
+                <tr
+                  key={s.id}
+                  className="border-b hover:bg-gray-50 transition"
+                >
+                  <td className="p-4">{s.id}</td>
+                  <td className="p-4 font-medium">{s.name}</td>
+                  <td className="p-4">{s.email}</td>
+                  <td className="p-4">{s.phone}</td>
 
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">
-                          {student.name?.charAt(0)}
-                        </div>
+                  <td className="p-4">
+                    <span
+                      className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                        s.status === "active"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {s.status}
+                    </span>
+                  </td>
 
-                        <span className="font-medium">
-                          {student.name}
-                        </span>
-                      </div>
-                    </td>
+                  <td className="p-4">
+                    <div className="flex justify-center gap-2">
+                      <button
+                        onClick={() => navigate(`/profile/${s.id}`)}
+                        className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-lg"
+                      >
+                        Profile
+                      </button>
 
-                    <td className="p-4 text-gray-600">
-                      {student.email}
-                    </td>
+                      <button
+                        onClick={() =>
+                          navigate(`/student/edit-student/${s.id}`)
+                        }
+                        className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-lg"
+                      >
+                        Edit
+                      </button>
 
-                    <td className="p-4 text-gray-600">
-                      {student.phone}
-                    </td>
-
-                    <td className="p-4">
-                      <div className="flex justify-center gap-2">
-                        <button
-                          onClick={() =>
-                            navigate(
-                              `/student/edit-student/${student.id}`
-                            )
-                          }
-                          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg"
-                        >
-                          Edit
-                        </button>
-
-                        <button
-                          onClick={() =>
-                            handleDelete(student.id)
-                          }
-                          className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="text-center p-10 text-gray-500"
-                  >
-                    No Students Found
+                      <button
+                        onClick={() => handleDelete(s)}
+                        className="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
-        </div>
-
-        {/* Pagination */}
-        <div className="flex justify-center items-center gap-2 p-5 border-t">
-
-          <button
-            disabled={currentPage === 1}
-            onClick={() =>
-              setCurrentPage(currentPage - 1)
-            }
-            className="px-4 py-2 bg-gray-200 rounded-lg disabled:opacity-50"
-          >
-            Previous
-          </button>
-
-          {[...Array(totalPages)].map((_, index) => (
-            <button
-              key={index + 1}
-              onClick={() =>
-                setCurrentPage(index + 1)
-              }
-              className={`px-4 py-2 rounded-lg ${
-                currentPage === index + 1
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200"
-              }`}
-            >
-              {index + 1}
-            </button>
-          ))}
-
-          <button
-            disabled={currentPage === totalPages}
-            onClick={() =>
-              setCurrentPage(currentPage + 1)
-            }
-            className="px-4 py-2 bg-gray-200 rounded-lg disabled:opacity-50"
-          >
-            Next
-          </button>
-
-        </div>
+        )}
       </div>
+
+      {/* Pagination */}
+
+      {!loading && (
+        <div className="flex items-center justify-between mt-8">
+
+          <button
+            onClick={() => setCurrentPage((p) => p - 1)}
+            disabled={currentPage === 1}
+            className={`px-5 py-2 rounded-lg font-semibold ${
+              currentPage === 1
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            ← Previous
+          </button>
+
+          <div className="flex gap-2 flex-wrap justify-center">
+            {Array.from({ length: totalPages }, (_, index) => {
+              const page = index + 1;
+
+              return (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={`w-10 h-10 rounded-lg font-semibold ${
+                    currentPage === page
+                      ? "bg-blue-600 text-white"
+                      : "bg-white border hover:bg-gray-100"
+                  }`}
+                >
+                  {page}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => setCurrentPage((p) => p + 1)}
+            disabled={currentPage === totalPages}
+            className={`px-5 py-2 rounded-lg font-semibold ${
+              currentPage === totalPages
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            Next →
+          </button>
+
+        </div>
+      )}
+
     </div>
   );
 }

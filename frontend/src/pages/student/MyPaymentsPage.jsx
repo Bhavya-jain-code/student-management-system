@@ -33,8 +33,8 @@ function MyPaymentsPage() {
   }, []);
 
   const totalPaid = payments
-    .filter((p) => p.status === "Paid")
-    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  .filter((p) => p.status?.toLowerCase() === "paid")
+  .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
   return (
     <div style={container}>
@@ -81,9 +81,9 @@ function MyPaymentsPage() {
                   style={{
                     ...statusBadge,
                     background:
-                      p.status === "Paid"
-                        ? "#22c55e"
-                        : "#ef4444",
+  p.status?.toLowerCase() === "paid"
+    ? "#22c55e"
+    : "#ef4444",
                   }}
                 >
                   {p.status}
@@ -110,14 +110,14 @@ function MyPaymentsPage() {
                 <div
                   style={{
                     ...progressFill,
-                    width:
-                      p.status === "Paid"
-                        ? "100%"
-                        : "40%",
-                    background:
-                      p.status === "Paid"
-                        ? "#22c55e"
-                        : "#ef4444",
+                   width:
+  p.status?.toLowerCase() === "paid"
+    ? "100%"
+    : "40%",
+                   background:
+  p.status?.toLowerCase() === "paid"
+    ? "#22c55e"
+    : "#ef4444",
                   }}
                 />
               </div>

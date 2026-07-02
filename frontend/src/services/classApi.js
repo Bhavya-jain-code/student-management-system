@@ -29,3 +29,9 @@ export const deleteClass = async (id) => {
   const res = await api.delete(`/classes/${id}`);
   return res.data;
 };
+
+// Get single class
+export const getClassById = async (id) => {
+  const res = await api.get(`/classes/${id}`);
+  return res.data;
+};

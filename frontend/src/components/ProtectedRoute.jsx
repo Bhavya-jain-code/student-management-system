@@ -16,7 +16,7 @@ function ProtectedRoute({
 
   if (
     allowedRoles &&
-    !allowedRoles.includes(role)
+    !allowedRoles.some((allowedRole) => allowedRole.toLowerCase() === role?.toLowerCase())
   ) {
     return <Navigate to="/" />;
   }

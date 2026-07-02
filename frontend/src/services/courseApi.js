@@ -15,10 +15,9 @@ export const addCourse = async (data) => {
 
 // Delete course
 export const deleteCourse = async (id) => {
-  const res = await axios.delete(`${BASE_URL}/courses/${id}`);
+  const res = await axios.put(`${BASE_URL}/courses/delete/${id}`);
   return res.data;
 };
-
 // Get single course
 export const getCourseById = async (id) => {
   const res = await axios.get(`${BASE_URL}/courses/${id}`);
@@ -29,4 +28,9 @@ export const getCourseById = async (id) => {
 export const updateCourse = async (id, data) => {
   const res = await axios.put(`${BASE_URL}/courses/${id}`, data);
   return res.data;
+};
+
+// Update only the course status
+export const updateCourseStatus = async (id, status) => {
+  return updateCourse(id, { status });
 };
