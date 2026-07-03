@@ -46,43 +46,6 @@ const pool = new Pool({
       : false,
 });
 
-const info = await pool.query(`
-  SELECT
-    current_database() AS db,
-    current_schema() AS schema
-`);
-
-console.log(info.rows);
-
-const tables = await pool.query(`
-  SELECT tablename
-  FROM pg_tables
-  WHERE schemaname = 'public'
-`);
-
-console.log(tables.rows);
-
-// DB CONNECT
-pool
-  .connect()
-  .then(() => console.log("✅ PostgreSQL Connected"))
-  .catch((err) => {
-    console.error("❌ DB Error:", err.message);
-  });
-const dbInfo = await pool.query(`
-  SELECT current_database() AS db,
-         current_schema() AS schema
-`);
-
-console.log("DB INFO:", dbInfo.rows);
-
-const tables = await pool.query(`
-  SELECT tablename
-  FROM pg_tables
-  WHERE schemaname = 'public'
-`);
-
-console.log("TABLES:", tables.rows);
 // ================= LOGIN =================
 app.post("/login", async (req, res) => {
   try {
