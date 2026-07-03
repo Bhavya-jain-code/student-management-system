@@ -45,7 +45,23 @@ const pool = new Pool({
       ? { rejectUnauthorized: false }
       : false,
 });
+app.get("/test-db", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT current_database(), current_schema()",
+    );
+    const tables = await pool.query(`
+      SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+    `);
 
+    res.json({
+      db: result.rows,
+      tables: tables.rows,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
 // ================= LOGIN =================
 app.post("/login", async (req, res) => {
   try {
@@ -82,14 +98,14 @@ app.post("/login", async (req, res) => {
     let studentId = null;
     if (dbUser.role?.toLowerCase() === "student") {
       const studentResult = await pool.query(
-        "SELECT id FROM students WHERE user_id = $1",
+        "SELECT id FROM public.students WHERE user_id = $1",
         [dbUser.id],
       );
       studentId = studentResult.rows[0]?.id ?? null;
 
       if (!studentId) {
         const fallbackResult = await pool.query(
-          "SELECT id FROM students WHERE email = $1 LIMIT 1",
+          "SELECT id FROM public.students WHERE email = $1 LIMIT 1",
           [dbUser.email],
         );
         studentId = fallbackResult.rows[0]?.id ?? null;
@@ -214,7 +230,7 @@ app.get("/dashboard", async (req, res) => {
     // TOTAL COUNTS (NO FILTER)
     // -------------------------
     const students = await pool.query(`
-      SELECT COUNT(*) FROM students
+      SELECT COUNT(*) FROM public.students
     `);
 
     const courses = await pool.query(`
@@ -351,7 +367,7 @@ app.get("/students", async (req, res) => {
 
     let query = `
       SELECT *
-      FROM students
+      FROM public.students
       WHERE status = 'active'
     `;
 
@@ -388,7 +404,7 @@ app.get("/students", async (req, res) => {
     // Total count (pagination ke liye)
     let countQuery = `
       SELECT COUNT(*) AS count
-      FROM students
+      FROM public.students
       WHERE status = 'active'
     `;
 
@@ -426,9 +442,10 @@ app.get("/students", async (req, res) => {
 // GET BY ID
 app.get("/students/:id", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM students WHERE id=$1", [
-      req.params.id,
-    ]);
+    const result = await pool.query(
+      "SELECT * FROM public.students WHERE id=$1",
+      [req.params.id],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -451,7 +468,7 @@ app.put("/students/:id", async (req, res) => {
 
     // 1. Update se pehle old student data nikalo
     const oldStudent = await pool.query(
-      "SELECT * FROM students WHERE id = $1",
+      "SELECT * FROM public.students WHERE id = $1",
       [req.params.id],
     );
 
@@ -507,7 +524,7 @@ app.put("/students/:id", async (req, res) => {
 app.delete("/students/:id", async (req, res) => {
   try {
     const oldStudent = await pool.query(
-      "SELECT * FROM students WHERE id = $1",
+      "SELECT *FROM public.students WHERE id = $1",
       [req.params.id],
     );
 
@@ -559,9 +576,10 @@ app.put("/students/:id/undo", async (req, res) => {
   try {
     const studentId = req.params.id;
 
-    const existing = await pool.query("SELECT * FROM students WHERE id = $1", [
-      studentId,
-    ]);
+    const existing = await pool.query(
+      "SELECT *FROM public.students WHERE id = $1",
+      [studentId],
+    );
 
     if (existing.rows.length === 0) {
       return res.status(404).json({
@@ -595,7 +613,7 @@ app.delete("/students/:id/hard", async (req, res) => {
     const studentId = req.params.id;
 
     const oldStudent = await pool.query(
-      "SELECT * FROM students WHERE id = $1",
+      "SELECT * FROM public.studentsWHERE id = $1",
       [studentId],
     );
 
@@ -616,7 +634,7 @@ app.delete("/students/:id/hard", async (req, res) => {
     await pool.query("DELETE FROM enrollments WHERE student_id = $1", [
       studentId,
     ]);
-    await pool.query("DELETE FROM students WHERE id = $1", [studentId]);
+    await pool.query("DELETE FROM public.students WHERE id = $1", [studentId]);
 
     await pool.query("COMMIT");
 
@@ -1983,7 +2001,7 @@ app.delete("/payments/hard/:id", async (req, res) => {
 
 app.get("/reports", async (req, res) => {
   try {
-    const students = await pool.query("SELECT COUNT(*) FROM students");
+    const students = await pool.query("SELECT COUNT(*) FROM public.students");
 
     const courses = await pool.query("SELECT COUNT(*) FROM courses");
 
@@ -2132,9 +2150,10 @@ app.get("/reports", async (req, res) => {
 
 app.get("/profile/:id", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM students WHERE id=$1", [
-      req.params.id,
-    ]);
+    const result = await pool.query(
+      "SELECT * FROM public.students WHERE id=$1",
+      [req.params.id],
+    );
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -2618,7 +2637,7 @@ app.get("/students/:id", async (req, res) => {
     // 1. Student basic info
     const studentResult = await pool.query(
       `SELECT id, name, email, phone, status
-       FROM students
+FROM public.students
        WHERE id = $1`,
       [id],
     );
@@ -2728,7 +2747,7 @@ app.put("/students/:id/password", async (req, res) => {
     await pool.query(
       `UPDATE users u
        SET password = $1
-       FROM students s
+      FROM public.students s
        WHERE s.user_id = u.id AND s.id = $2`,
       [hashedPassword, id],
     );
