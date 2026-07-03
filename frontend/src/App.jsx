@@ -6,7 +6,7 @@ import {
 } from "react-router-dom";
 
 import ProtectedRoute from "./components/ProtectedRoute";
-import Profile from "./pages/Profile";
+import Profile from "./pages/profile";
 
 // PAGES
 import LoginPage from "./pages/LoginPage";
