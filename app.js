@@ -30,9 +30,8 @@ const SECRET = "super_secret_key";
 const app = express();
 app.use(
   cors({
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin: ["http://localhost:5173", process.env.FRONTEND_URL],
+    credentials: true,
   }),
 );
 app.use(express.json());
@@ -40,11 +39,11 @@ app.use(express.json());
 const { Pool } = pg;
 
 const pool = new Pool({
-  user: "postgres",
-  host: "localhost",
-  database: "studentDB",
-  password: "bhavyajain",
-  port: 5433,
+  connectionString: process.env.DATABASE_URL,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false,
 });
 
 // DB CONNECT
@@ -2815,8 +2814,8 @@ app.get("/student/:id/courses", async (req, res) => {
    🚀 SERVER START
 ========================= */
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
