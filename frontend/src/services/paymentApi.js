@@ -1,14 +1,12 @@
-import axios from "axios";
-
-const BASE_URL = "http://localhost:3000";
+import api from "./axiosInstance";
 
 export const addPayment = async (data) => {
-  const res = await axios.post(`${BASE_URL}/payments`, data);
+  const res = await api.post("/payments", data);
   return res.data;
 };
 
 export const getPayments = async () => {
-  const res = await axios.get(`${BASE_URL}/payments`);
+  const res = await api.get("/payments");
   return res.data;
 };
 
@@ -17,14 +15,11 @@ export const deletePayment = async (id) => {
     throw new Error("No payment id provided");
   }
 
-  const res = await axios.delete(
-    `${BASE_URL}/payments/${encodeURIComponent(id)}`,
-  );
+  const res = await api.delete(`/payments/${encodeURIComponent(id)}`);
   return res.data;
 };
 
-// FIXED (was API -> BASE_URL)
 export const undoPayment = async (id) => {
-  const res = await axios.put(`${BASE_URL}/payments/undo/${id}`);
+  const res = await api.put(`/payments/undo/${id}`);
   return res.data;
 };

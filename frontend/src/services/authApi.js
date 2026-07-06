@@ -1,17 +1,14 @@
-import axios from "axios";
-
-const BASE_URL = "http://localhost:3000";
+import api from "./axiosInstance";
 
 // REGISTER
 export const registerUser = async (userData) => {
-  const response = await axios.post(`${BASE_URL}/register`, userData);
-
+  const response = await api.post("/register", userData);
   return response.data;
 };
 
 // LOGIN
 export const loginUser = async (email, password) => {
-  const response = await axios.post(`${BASE_URL}/login`, {
+  const response = await api.post("/login", {
     email,
     password,
   });

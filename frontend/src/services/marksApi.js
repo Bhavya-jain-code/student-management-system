@@ -1,13 +1,10 @@
-import axios from "axios";
-
-const BASE_URL = "http://localhost:3000";
+import api from "./axiosInstance";
 
 // ===========================
 // Add Single Marks
 // ===========================
 export const addMarks = async (data) => {
-  const res = await axios.post(`${BASE_URL}/marks`, data);
-
+  const res = await api.post("/marks", data);
   return res.data;
 };
 
@@ -15,8 +12,7 @@ export const addMarks = async (data) => {
 // Bulk Marks
 // ===========================
 export const bulkMarks = async (data) => {
-  const res = await axios.post(`${BASE_URL}/marks/bulk`, data);
-
+  const res = await api.post("/marks/bulk", data);
   return res.data;
 };
 
@@ -24,8 +20,7 @@ export const bulkMarks = async (data) => {
 // Get All Marks
 // ===========================
 export const getMarks = async () => {
-  const res = await axios.get(`${BASE_URL}/marks`);
-
+  const res = await api.get("/marks");
   return res.data;
 };
 
@@ -33,8 +28,7 @@ export const getMarks = async () => {
 // Delete Marks
 // ===========================
 export const deleteMarks = async (id) => {
-  const res = await axios.delete(`${BASE_URL}/marks/${id}`);
-
+  const res = await api.delete(`/marks/${id}`);
   return res.data;
 };
 
@@ -42,7 +36,6 @@ export const deleteMarks = async (id) => {
 // Get Students By Course
 // ===========================
 export const getStudentsByCourse = async (courseId) => {
-  const res = await axios.get(`${BASE_URL}/courses/${courseId}/students`);
-
+  const res = await api.get(`/courses/${courseId}/students`);
   return res.data;
 };

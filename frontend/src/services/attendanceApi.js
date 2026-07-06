@@ -1,46 +1,31 @@
-import axios from "axios";
+import api from "./axiosInstance";
 
-const BASE_URL = "http://localhost:3000";
-
-// -------------------
 // Add Single Attendance
-// -------------------
 export const addAttendance = async (data) => {
-  const response = await axios.post(`${BASE_URL}/attendance`, data);
+  const response = await api.post("/attendance", data);
   return response.data;
 };
 
-// -------------------
 // Bulk Attendance
-// -------------------
 export const bulkAttendance = async (data) => {
-  const response = await axios.post(`${BASE_URL}/attendance/bulk`, data);
-
+  const response = await api.post("/attendance/bulk", data);
   return response.data;
 };
 
-// -------------------
 // Get Students By Course
-// -------------------
 export const getStudentsByCourse = async (courseId) => {
-  const response = await axios.get(`${BASE_URL}/courses/${courseId}/students`);
-
+  const response = await api.get(`/courses/${courseId}/students`);
   return response.data;
 };
 
-// -------------------
 // Get Attendance
-// -------------------
 export const getAttendance = async () => {
-  const response = await axios.get(`${BASE_URL}/attendance`);
+  const response = await api.get("/attendance");
   return response.data;
 };
 
-// -------------------
 // Delete Attendance
-// -------------------
 export const deleteAttendance = async (id) => {
-  const response = await axios.delete(`${BASE_URL}/attendance/${id}`);
-
+  const response = await api.delete(`/attendance/${id}`);
   return response.data;
 };
