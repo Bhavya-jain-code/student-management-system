@@ -172,14 +172,32 @@ app.post("/auth/google", async (req, res) => {
       return res.status(401).json({ message: "Google account email not found" });
     }
 
-    const user = await pool.query("SELECT * FROM users WHERE email = $1", [
+    let user = await pool.query("SELECT * FROM users WHERE email = $1", [
       email,
     ]);
 
+    // Auto-register on first Google sign-in
     if (user.rows.length === 0) {
-      return res.status(401).json({
-        message: "No account found for this Google email. Please register first.",
-      });
+      const name = payload.name || email.split("@")[0];
+      const role = "Student";
+
+      const created = await pool.query(
+        `INSERT INTO users (name, email, password, role)
+         VALUES ($1, $2, NULL, $3)
+         RETURNING *`,
+        [name, email, role],
+      );
+
+      const newUser = created.rows[0];
+
+      await pool.query(
+        `INSERT INTO students
+         (user_id, name, email, phone, address, status)
+         VALUES ($1, $2, $3, NULL, NULL, 'active')`,
+        [newUser.id, newUser.name, newUser.email],
+      );
+
+      user = created;
     }
 
     const dbUser = user.rows[0];
