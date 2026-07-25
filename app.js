@@ -5,11 +5,16 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import { OAuth2Client } from "google-auth-library";
 import { pushAction, popAction } from "./services/undoStack.js";
 import { enqueue, dequeue, getQueue } from "./services/queue.js";
 // Load environment variables as early as possible
 dotenv.config();
 console.log("DATABASE_URL =", process.env.DATABASE_URL);
+
+const googleClient = process.env.GOOGLE_CLIENT_ID
+  ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+  : null;
 
 // Initialize Google Gemini only if API key is provided.
 // Wrap in an async IIFE and guard against missing/invalid keys so
@@ -138,6 +143,81 @@ app.post("/login", async (req, res) => {
   } catch (err) {
     console.error("LOGIN ERROR FULL:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ================= GOOGLE LOGIN =================
+app.post("/auth/google", async (req, res) => {
+  try {
+    if (!googleClient || !process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({
+        message: "Google login is not configured. Set GOOGLE_CLIENT_ID in .env",
+      });
+    }
+
+    const { credential } = req.body;
+    if (!credential) {
+      return res.status(400).json({ message: "Google credential required" });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const email = payload?.email;
+
+    if (!email) {
+      return res.status(401).json({ message: "Google account email not found" });
+    }
+
+    const user = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    if (user.rows.length === 0) {
+      return res.status(401).json({
+        message: "No account found for this Google email. Please register first.",
+      });
+    }
+
+    const dbUser = user.rows[0];
+
+    const token = jwt.sign({ id: dbUser.id, role: dbUser.role }, SECRET, {
+      expiresIn: "1d",
+    });
+
+    let studentId = null;
+    if (dbUser.role?.toLowerCase() === "student") {
+      const studentResult = await pool.query(
+        "SELECT id FROM students WHERE user_id = $1",
+        [dbUser.id],
+      );
+      studentId = studentResult.rows[0]?.id ?? null;
+
+      if (!studentId) {
+        const fallbackResult = await pool.query(
+          "SELECT id FROM students WHERE email = $1 LIMIT 1",
+          [dbUser.email],
+        );
+        studentId = fallbackResult.rows[0]?.id ?? null;
+      }
+    }
+
+    res.json({
+      token,
+      user: {
+        id: dbUser.id,
+        name: dbUser.name,
+        email: dbUser.email,
+        role: dbUser.role,
+      },
+      student_id: studentId,
+    });
+  } catch (err) {
+    console.error("GOOGLE LOGIN ERROR:", err);
+    res.status(401).json({ message: "Google login failed" });
   }
 });
 
