@@ -180,12 +180,18 @@ app.post("/auth/google", async (req, res) => {
     if (user.rows.length === 0) {
       const name = payload.name || email.split("@")[0];
       const role = "Student";
+      // password & phone are NOT NULL (+ phone UNIQUE) in production DB
+      const hashedPassword = await bcrypt.hash(
+        `google_${payload.sub}_${Date.now()}`,
+        10,
+      );
+      const phone = `g${String(payload.sub).replace(/\D/g, "").slice(-19)}`;
 
       const created = await pool.query(
         `INSERT INTO users (name, email, password, role)
-         VALUES ($1, $2, NULL, $3)
+         VALUES ($1, $2, $3, $4)
          RETURNING *`,
-        [name, email, role],
+        [name, email, hashedPassword, role],
       );
 
       const newUser = created.rows[0];
@@ -193,8 +199,8 @@ app.post("/auth/google", async (req, res) => {
       await pool.query(
         `INSERT INTO students
          (user_id, name, email, phone, address, status)
-         VALUES ($1, $2, $3, NULL, NULL, 'active')`,
-        [newUser.id, newUser.name, newUser.email],
+         VALUES ($1, $2, $3, $4, NULL, 'active')`,
+        [newUser.id, newUser.name, newUser.email, phone],
       );
 
       user = created;

@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { registerUser } from "../services/authApi";
+import api from "../services/axiosInstance";
 
 function RegisterPage() {
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -21,6 +23,32 @@ function RegisterPage() {
     });
   };
 
+  const completeGoogleAuth = (res) => {
+    const { token, user } = res.data;
+
+    if (!token || !user) {
+      alert("Invalid response from server");
+      return;
+    }
+
+    localStorage.setItem("token", token);
+    localStorage.setItem("role", user.role);
+    localStorage.setItem("name", user.name);
+    localStorage.setItem("email", user.email);
+
+    if (res.data.student_id) {
+      localStorage.setItem("student_id", res.data.student_id);
+    }
+
+    alert(`Welcome ${user.name}`);
+
+    if (user.role === "Admin") {
+      navigate("/admin");
+    } else {
+      navigate("/student");
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -30,29 +58,83 @@ function RegisterPage() {
       alert(data.message);
       navigate("/login");
     } catch (err) {
-      
-      alert(
-        err.response?.data?.message ||
-          "Registration Failed"
-      );
+      alert(err.response?.data?.message || "Registration Failed");
     }
   };
+
+  const handleGoogleResponse = async (response) => {
+    try {
+      setLoading(true);
+
+      const res = await api.post("/auth/google", {
+        credential: response.credential,
+      });
+
+      completeGoogleAuth(res);
+    } catch (err) {
+      console.error(err);
+      alert(err.response?.data?.message || "Google sign-up failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      console.warn("VITE_GOOGLE_CLIENT_ID not set");
+      return;
+    }
+
+    const renderGoogleButton = () => {
+      if (!window.google?.accounts?.id) return;
+
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleResponse,
+      });
+
+      const btn = document.getElementById("googleSignupBtn");
+      if (btn) {
+        btn.innerHTML = "";
+        window.google.accounts.id.renderButton(btn, {
+          theme: "outline",
+          size: "large",
+          width: 320,
+          text: "signup_with",
+        });
+      }
+    };
+
+    if (window.google?.accounts?.id) {
+      renderGoogleButton();
+      return;
+    }
+
+    const existing = document.querySelector(
+      'script[src="https://accounts.google.com/gsi/client"]',
+    );
+    if (existing) {
+      existing.addEventListener("load", renderGoogleButton);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = renderGoogleButton;
+    document.body.appendChild(script);
+  }, []);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-r from-blue-500 to-indigo-600 p-4">
       <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl p-8">
-        
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800">
-            Create Account
-          </h1>
-          <p className="text-gray-500 mt-2">
-            Register to continue
-          </p>
+          <h1 className="text-3xl font-bold text-gray-800">Create Account</h1>
+          <p className="text-gray-500 mt-2">Register to continue</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-
           <div>
             <label className="block mb-2 text-gray-700 font-medium">
               Full Name
@@ -147,23 +229,29 @@ function RegisterPage() {
               className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="Student">Student</option>
-            
               <option value="Admin">Admin</option>
             </select>
           </div>
 
           <button
             type="submit"
+            disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition duration-300"
           >
             Register Now
           </button>
         </form>
 
+        <div className="flex items-center gap-3 my-6">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-sm text-gray-400">or</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+
+        <div id="googleSignupBtn" className="flex justify-center min-h-[40px]" />
+
         <div className="text-center mt-6">
-          <p className="text-gray-500">
-            Already have an account?
-          </p>
+          <p className="text-gray-500">Already have an account?</p>
 
           <button
             onClick={() => navigate("/login")}
